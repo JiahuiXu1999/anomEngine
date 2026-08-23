@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anom-engine.local/schema/model-package-v1.json",
+  "title": "anomEngine inference model package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "model", "graph_contract", "input", "runtime", "outputs", "algorithm"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "algorithm"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "algorithm": { "enum": ["patchcore", "padim", "direct", "efficientad", "dfkde", "spade"] }
+      }
+    },
+    "graph_contract": { "enum": ["feature_pyramid", "prediction"] },
+    "input": {
+      "type": "object",
+      "required": ["tensor"],
+      "properties": {
+        "tensor": { "type": "string", "minLength": 1 },
+        "layout": { "enum": ["NCHW", "NHWC"] },
+        "color": { "enum": ["RGB", "BGR"] },
+        "size": { "$ref": "#/$defs/size" },
+        "resize": { "$ref": "#/$defs/size" },
+        "center_crop": { "$ref": "#/$defs/size" },
+        "interpolation": { "enum": ["nearest", "linear", "cubic", "area"] },
+        "mean": { "$ref": "#/$defs/triple" },
+        "std": { "$ref": "#/$defs/positiveTriple" }
+      },
+      "anyOf": [ { "required": ["size"] }, { "required": ["resize"] } ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": { "enum": ["tensorrt", "onnxruntime"] },
+        "onnx": { "$ref": "#/$defs/artifactPath" },
+        "engine": { "$ref": "#/$defs/artifactPath" },
+        "load_policy": { "enum": ["engine_only", "prefer_engine", "build_if_missing"] },
+        "fp16": { "type": "boolean" },
+        "max_batch_size": { "type": "integer", "minimum": 1 },
+        "workspace_mb": { "type": "integer", "minimum": 1 },
+        "provider": { "enum": ["cpu", "cuda"] },
+        "strict_provider": { "type": "boolean" },
+        "device_id": { "type": "integer", "minimum": 0 },
+        "intra_op_threads": { "type": "integer", "minimum": 0 },
+        "inter_op_threads": { "type": "integer", "minimum": 0 },
+        "graph_optimization": { "enum": ["disabled", "basic", "extended", "all"] },
+        "execution_mode": { "enum": ["sequential", "parallel"] },
+        "enable_memory_pattern": { "type": "boolean" },
+        "enable_cpu_memory_arena": { "type": "boolean" },
+        "enable_profiling": { "type": "boolean" },
+        "profile_file_prefix": { "type": "string", "minLength": 1 }
+      },
+      "anyOf": [ { "required": ["onnx"] }, { "required": ["engine"] } ],
+      "allOf": [
+        {
+          "if": { "properties": { "backend": { "const": "onnxruntime" } }, "required": ["backend"] },
+          "then": { "required": ["onnx"] }
+        }
+      ]
+    },
+    "outputs": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "algorithm": { "type": "object", "required": ["type"] },
+    "postprocess": {
+      "type": "object",
+      "properties": {
+        "normalize": { "type": "boolean" },
+        "threshold": { "type": "boolean" },
+        "image_threshold": { "type": "number" },
+        "pixel_threshold": { "type": "number" },
+        "image_min": { "type": "number" },
+        "image_max": { "type": "number" },
+        "pixel_min": { "type": "number" },
+        "pixel_max": { "type": "number" },
+        "image_sensitivity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "pixel_sensitivity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "smooth": { "type": "boolean" },
+        "smooth_kernel": { "type": "integer", "minimum": 1 },
+        "smooth_sigma": { "type": "number", "minimum": 0 },
+        "morphology": { "type": "boolean" },
+        "morphology_kernel": { "type": "integer", "minimum": 1 },
+        "morphology_iterations": { "type": "integer", "minimum": 0 },
+        "morphology_mode": { "enum": ["open", "close"] },
+        "analyze": { "type": "boolean" },
+        "min_region_area": { "type": "integer", "minimum": 0 },
+        "max_regions": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "patchcore" } } } } },
+      "then": {
+        "properties": {
+          "graph_contract": { "const": "feature_pyramid" },
+          "algorithm": { "$ref": "#/$defs/patchcore" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "padim" } } } } },
+      "then": {
+        "properties": {
+          "graph_contract": { "const": "feature_pyramid" },
+          "algorithm": { "$ref": "#/$defs/padim" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "direct" } } } } },
+      "then": {
+        "properties": {
+          "graph_contract": { "const": "prediction" },
+          "algorithm": { "$ref": "#/$defs/direct" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "efficientad" } } } } },
+      "then": {
+        "properties": {
+          "graph_contract": { "const": "prediction" },
+          "algorithm": { "$ref": "#/$defs/efficientad" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "dfkde" } } } } },
+      "then": {
+        "properties": {
+          "graph_contract": { "const": "feature_pyramid" },
+          "algorithm": { "$ref": "#/$defs/dfkde" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "spade" } } } } },
+      "then": {
+        "properties": {
+          "graph_contract": { "const": "feature_pyramid" },
+          "algorithm": { "$ref": "#/$defs/spade" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "artifactPath": { "type": "string", "minLength": 1 },
+    "size": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": { "type": "integer", "minimum": 1 }
+    },
+    "triple": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "positiveTriple": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": { "type": "number", "exclusiveMinimum": 0 }
+    },
+    "featureLayers": {
+      "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }
+    },
+    "patchcore": {
+      "type": "object",
+      "required": ["type", "index", "feature_layers", "embedding_dimension"],
+      "properties": {
+        "type": { "const": "patchcore" },
+        "index": { "$ref": "#/$defs/artifactPath" },
+        "feature_layers": { "$ref": "#/$defs/featureLayers" },
+        "embedding_dimension": { "type": "integer", "minimum": 1 },
+        "num_neighbors": { "type": "integer", "minimum": 1 },
+        "pooling_kernel": { "type": "integer", "minimum": 1 },
+        "pooling_stride": { "type": "integer", "minimum": 1 },
+        "pooling_padding": { "type": "integer", "minimum": 0 },
+        "gaussian_sigma": { "type": "number", "minimum": 0 },
+        "sqrt_distances": { "type": "boolean" },
+        "weighted_image_score": { "type": "boolean" }
+      }
+    },
+    "padim": {
+      "type": "object",
+      "required": ["type", "statistics", "channel_indices", "feature_layers", "embedding_dimension", "feature_map_size"],
+      "properties": {
+        "type": { "const": "padim" },
+        "statistics": { "$ref": "#/$defs/artifactPath" },
+        "channel_indices": { "$ref": "#/$defs/artifactPath" },
+        "feature_layers": { "$ref": "#/$defs/featureLayers" },
+        "embedding_dimension": { "type": "integer", "minimum": 1 },
+        "feature_map_size": { "$ref": "#/$defs/size" },
+        "gaussian_sigma": { "type": "number", "minimum": 0 }
+      }
+    },
+    "direct": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "direct" },
+        "score_semantic": { "type": "string", "minLength": 1 },
+        "map_semantic": { "type": "string", "minLength": 1 }
+      }
+    },
+    "efficientad": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "efficientad" },
+        "teacher_semantic": { "type": "string", "minLength": 1 },
+        "student_semantic": { "type": "string", "minLength": 1 },
+        "reconstruction_error_semantic": { "type": "string", "minLength": 1 },
+        "hard_weight": { "type": "number", "minimum": 0 },
+        "soft_weight": { "type": "number", "minimum": 0 },
+        "gaussian_sigma": { "type": "number", "minimum": 0 }
+      }
+    },
+    "dfkde": {
+      "type": "object",
+      "required": ["type", "statistics", "feature_layers", "embedding_dimension"],
+      "properties": {
+        "type": { "const": "dfkde" },
+        "statistics": { "$ref": "#/$defs/artifactPath" },
+        "feature_layers": { "$ref": "#/$defs/featureLayers" },
+        "embedding_dimension": { "type": "integer", "minimum": 1 },
+        "n_components": { "type": "integer", "minimum": 1 },
+        "kernel_sigma": { "type": "number", "exclusiveMinimum": 0 },
+        "gaussian_sigma": { "type": "number", "minimum": 0 }
+      }
+    },
+    "spade": {
+      "type": "object",
+      "required": ["type", "feature_layers", "indexes"],
+      "properties": {
+        "type": { "const": "spade" },
+        "feature_layers": { "$ref": "#/$defs/featureLayers" },
+        "indexes": {
+          "type": "array", "minItems": 1,
+          "items": { "$ref": "#/$defs/artifactPath" }
+        },
+        "num_neighbors": { "type": "integer", "minimum": 1 },
+        "gaussian_sigma": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

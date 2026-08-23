@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "bottle-efficientad",
+    "version": "1.0.0",
+    "algorithm": "efficientad"
+  },
+  "graph_contract": "prediction",
+  "input": {
+    "tensor": "input",
+    "layout": "NCHW",
+    "color": "RGB",
+    "size": [256, 256],
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225]
+  },
+  "runtime": {
+    "onnx": "efficientad.onnx",
+    "engine": "cache/efficientad.engine",
+    "load_policy": "prefer_engine",
+    "fp16": true,
+    "max_batch_size": 4,
+    "workspace_mb": 2048
+  },
+  "outputs": {
+    "teacher": "teacher",
+    "student": "student",
+    "reconstruction_error": "reconstruction_error"
+  },
+  "algorithm": {
+    "type": "efficientad",
+    "teacher_semantic": "teacher",
+    "student_semantic": "student",
+    "reconstruction_error_semantic": "reconstruction_error",
+    "hard_weight": 1.0,
+    "soft_weight": 1.0,
+    "gaussian_sigma": 4.0
+  },
+  "postprocess": {
+    "normalize": false,
+    "threshold": true,
+    "image_threshold": 0.5,
+    "pixel_threshold": 0.5,
+    "image_sensitivity": 0.5,
+    "pixel_sensitivity": 0.5
+  }
+}

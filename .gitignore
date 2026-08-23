@@ -1,0 +1,7 @@
+# 只跟踪 src/ 目录，其余全部忽略
+/*
+
+# 保留 .gitignore 与 src/
+!/.gitignore
+!/src/
+!/src/**

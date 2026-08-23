@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "bottle-dfkde",
+    "version": "1.0.0",
+    "algorithm": "dfkde"
+  },
+  "graph_contract": "feature_pyramid",
+  "input": {
+    "tensor": "input",
+    "layout": "NCHW",
+    "color": "RGB",
+    "size": [224, 224],
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225]
+  },
+  "runtime": {
+    "onnx": "backbone.onnx",
+    "engine": "cache/backbone.engine",
+    "load_policy": "prefer_engine",
+    "fp16": false,
+    "max_batch_size": 4,
+    "workspace_mb": 2048
+  },
+  "outputs": {
+    "layer1": "layer1",
+    "layer2": "layer2",
+    "layer3": "layer3"
+  },
+  "algorithm": {
+    "type": "dfkde",
+    "statistics": "dfkde_statistics.bin",
+    "feature_layers": ["layer1", "layer2", "layer3"],
+    "embedding_dimension": 1792,
+    "n_components": 16,
+    "kernel_sigma": 10.0,
+    "gaussian_sigma": 4.0
+  },
+  "postprocess": {
+    "normalize": true,
+    "threshold": true,
+    "image_threshold": 12.0,
+    "pixel_threshold": 8.0,
+    "image_min": 0.0,
+    "image_max": 30.0,
+    "pixel_min": 0.0,
+    "pixel_max": 24.0,
+    "image_sensitivity": 0.5,
+    "pixel_sensitivity": 0.5
+  }
+}

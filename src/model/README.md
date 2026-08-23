@@ -1,0 +1,143 @@
+# anom::model inference SDK
+
+`src/model` is the inference-only core model layer. It owns the stable public API, model package contract,
+backend-neutral tensor/result types, and session orchestration. Concrete runtimes, algorithms, image processing,
+and infrastructure are deliberately outside this directory.
+
+## Source layout
+
+| Directory | Responsibility |
+|---|---|
+| `src/model` | Public session API, manifest/package contract, status and tensor/result types |
+| `src/backends` | Runtime abstraction, factory, TensorRT and ONNX Runtime implementations |
+| `src/adapters` | PatchCore, PaDiM and direct-prediction algorithm adapters |
+| `src/pipeline` | Training-side PatchCore memory-bank and PaDiM statistics pipelines |
+| `src/processing` | Image preprocessing and anomaly-result postprocessing |
+| `src/infrastructure` | Internal JSON parser and SHA-256 artifact verification |
+
+Consumers should normally include only `model/inference_session.h`. The core public header uses forward
+declarations for runtime and algorithm implementations, so backend-specific headers and ABIs do not leak into
+application code.
+
+## Public entry point
+
+```cpp
+#include "model/inference_session.h"
+
+auto session = anom::model::InferenceSession::load("deployment/models/bottle-padim/1.0.0");
+if (!session) {
+    std::cerr << session.status().describe() << '\n';
+    return;
+}
+
+auto prediction = session.value()->predict(image);
+if (prediction) {
+    std::cout << prediction.value().score << '\n';
+    cv::imwrite("mask.png", prediction.value().mask);
+}
+```
+
+The package root must contain `manifest.json`. All artifact paths are relative to this root and are rejected if
+they are absolute or escape through `..`. An optional `checksums` object maps artifact paths to lowercase SHA-256
+digests; every listed artifact is verified before any model or index is loaded. Generated engine caches normally
+remain outside this immutable checksum set.
+
+## Graph contracts
+
+- `feature_pyramid`: the selected backend returns named NCHW feature maps. `PatchCoreAdapter` or `PadimAdapter` computes the
+  anomaly prediction using immutable algorithm assets.
+- `prediction`: the selected backend returns an image score and, optionally, an anomaly map. `DirectPredictionAdapter` only
+  converts those tensors to the standard result.
+
+Tensor names are never guessed. The `outputs` object binds stable semantic names to exact graph tensor names.
+
+## Postprocessing & analysis contract
+
+Every algorithm adapter converges on a single intermediate — `RawPrediction` — and never performs
+postprocessing itself. `AnomalyPostprocessor` then runs one shared, configurable stage chain in a fixed order:
+
+```
+geometry restore -> normalize -> smooth -> threshold -> morphology -> analyze
+```
+
+- The adapter emits `score` in its raw scale and `anomalyMap` as a floating-point `CV_32FC1` score map in
+  pre-processed coordinates at native resolution. Higher always means more anomalous. An empty `anomalyMap` is
+  legal (models without a spatial head) and degrades the chain to image-level-only processing.
+- `normalize` rescales scores to `[0, 1]` using the `*_min` / `*_threshold` / `*_max` bounds; when disabled the
+  raw scale is kept and thresholds are compared directly.
+- `smooth` applies a Gaussian blur to the map before thresholding (`smooth_kernel`, `smooth_sigma`).
+- `threshold` produces the binarized `mask` from `pixel_threshold` / `pixel_sensitivity`.
+- `morphology` cleans the mask with an `open` or `close` operation.
+- `analyze` runs connected-component analysis (`AnomalyAnalyzer`) and populates `AnomalyAnalysis`: per-region
+  bounding boxes, areas, and score statistics (sorted by descending area), plus image-level aggregates
+  (`anomalyAreaRatio`, `meanScore`, `maxScore`, `regionCount`). `min_region_area` and `max_regions` control
+  filtering and truncation.
+
+All stages are optional and default to their historical no-op behavior, so existing manifests keep working.
+
+## PaDiM statistics format
+
+`statistics` is a little-endian binary file:
+
+| Field | Type | Count |
+|---|---:|---:|
+| magic (`ANPADIM\0`) | byte | 8 |
+| format version (`1`) | uint32 | 1 |
+| feature height | uint32 | 1 |
+| feature width | uint32 | 1 |
+| selected dimension | uint32 | 1 |
+| mean, layout `L,D` | float32 | `H*W*D` |
+| precision, layout `L,D,D` | float32 | `H*W*D*D` |
+
+`channel_indices` is exactly `D` little-endian `int32` values. Indices must be unique and non-negative. The
+runtime never generates indices or fits Gaussian statistics.
+
+## Runtime behavior
+
+- `runtime.backend` selects `tensorrt` (the backwards-compatible default) or `onnxruntime`.
+- ONNX Runtime supports `cpu` and, when built with `ANOM_ORT_ENABLE_CUDA=ON`, `cuda`. `strict_provider=true`
+  disables ORT's implicit CPU fallback for CUDA sessions so an unsupported deployment fails during load instead
+  of silently changing latency characteristics.
+- ORT discovers every graph input/output from model metadata, preserves dynamic dimensions in the signature,
+  validates concrete request shapes and copies resolved dynamic outputs into the backend-neutral `TensorMap`.
+- ORT thread counts, sequential/parallel execution, graph optimization, memory pattern, CPU arena, device id, and
+  JSON profiling are controlled by the manifest. Zero thread counts delegate sizing to ORT.
+- `fp16`, `workspace_mb`, engine cache, and engine load policy remain TensorRT settings. ORT preserves the data
+  types exported in the ONNX graph and does not silently rewrite an FP32 model to FP16.
+- TensorRT engine loading and ONNX building are controlled by `engine_only`, `prefer_engine`, or
+  `build_if_missing`.
+- Dynamic output shapes are resolved from the execution context before allocation.
+- Device buffers grow on demand and are reused. A non-blocking CUDA stream performs asynchronous transfers.
+- A backend instance serializes access to its execution context. Multiple sessions can be used for concurrent
+  execution until a context-pool implementation is introduced.
+- Every load boundary validates data type, rank, semantic output bindings, algorithm asset dimensions, and file
+  lengths before inference.
+
+See `manifest.schema.json`, `examples/patchcore.manifest.json`, `examples/padim.manifest.json`, and
+`examples/padim-ort.manifest.json` for the formal schema and complete examples.
+
+## Building with ONNX Runtime
+
+The checked-in presets build and test the complete SDK:
+
+```powershell
+cmake --preset clang-cl-ninja-release
+cmake --build --preset release
+ctest --preset release
+```
+
+The `debug` preset intentionally uses `RelWithDebInfo`: the bundled FAISS and ORT binaries are Release-CRT
+packages, so a true `/MDd` Debug executable is not ABI-safe with them. It still emits debugging information.
+
+Place an official C/C++ ONNX Runtime distribution under `libs/onnxruntime`, or point CMake at one explicitly:
+
+```powershell
+cmake -S . -B build -DONNXRUNTIME_ROOT=D:/sdk/onnxruntime
+```
+
+The backend is enabled by default and configuration fails early when its headers, import library, or Windows DLL
+are missing. Use `-DANOM_ENABLE_ONNXRUNTIME=OFF` for a TensorRT-only build. CUDA EP requires a GPU-enabled ORT
+distribution and `-DANOM_ORT_ENABLE_CUDA=ON`; a CPU package intentionally rejects a CUDA manifest.
+
+`examples/padim-ort.manifest.json` shows a complete PaDiM package configuration. PaDiM itself remains backend
+independent: its adapter consumes the same explicitly named feature tensors from ORT or TensorRT.
