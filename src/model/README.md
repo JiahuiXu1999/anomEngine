@@ -1,8 +1,24 @@
-# anom::model inference SDK
+# anomEngine inference SDK
 
-`src/model` is the inference-only core model layer. It owns the stable public API, model package contract,
-backend-neutral tensor/result types, and session orchestration. Concrete runtimes, algorithms, image processing,
-and infrastructure are deliberately outside this directory.
+The supported consumer boundary is the versioned C ABI in `include/anomEngine/anomEngine.h`. Applications link
+only `anomEngine.lib` / `anomEngine.dll`; the core selects and dynamically loads the required algorithm and
+backend plugins from the model manifest. C++ implementation headers under `src` are private and are not part of
+the SDK ABI.
+
+## SDK layout
+
+```text
+include/anomEngine/anomEngine.h
+lib/anomEngine.lib
+bin/anomEngine.dll
+bin/anom_algo_<algorithm>.dll
+bin/anom_backend_<backend>.dll
+```
+
+By default plugins are resolved next to `anomEngine.dll`. `anom_session_options_t::plugin_directory_utf8` can
+select a different explicit directory. Plugins are loaded with a fixed, version-negotiated C function table;
+STL, OpenCV types, exceptions, and C++ virtual interfaces never cross a DLL boundary. Memory returned by the
+public API is released with `anom_prediction_release`.
 
 ## Source layout
 
@@ -15,26 +31,36 @@ and infrastructure are deliberately outside this directory.
 | `src/processing` | Image preprocessing and anomaly-result postprocessing |
 | `src/infrastructure` | Internal JSON parser and SHA-256 artifact verification |
 
-Consumers should normally include only `model/inference_session.h`. The core public header uses forward
-declarations for runtime and algorithm implementations, so backend-specific headers and ABIs do not leak into
-application code.
+Internal C++ tests may include `model/inference_session.h`, but SDK consumers should include only
+`anomEngine/anomEngine.h`.
 
 ## Public entry point
 
-```cpp
-#include "model/inference_session.h"
+```c
+#include <anomEngine/anomEngine.h>
 
-auto session = anom::model::InferenceSession::load("deployment/models/bottle-padim/1.0.0");
-if (!session) {
-    std::cerr << session.status().describe() << '\n';
-    return;
+anom_session_t* session = NULL;
+anom_session_options_t options = {0};
+options.struct_size = sizeof(options);
+if (anom_session_create("models/bottle-padim/1.0.0", &options, &session) != ANOM_STATUS_OK) {
+    return 1;
 }
 
-auto prediction = session.value()->predict(image);
-if (prediction) {
-    std::cout << prediction.value().score << '\n';
-    cv::imwrite("mask.png", prediction.value().mask);
+anom_image_t image = {0};
+image.struct_size = sizeof(image);
+image.data = pixels;
+image.width = width;
+image.height = height;
+image.stride_bytes = stride;
+image.pixel_format = ANOM_PIXEL_FORMAT_BGR8;
+
+anom_prediction_t prediction = {0};
+prediction.struct_size = sizeof(prediction);
+if (anom_session_predict(session, &image, &prediction) == ANOM_STATUS_OK) {
+    /* consume prediction.score, prediction.mask, prediction.regions, ... */
+    anom_prediction_release(&prediction);
 }
+anom_session_destroy(session);
 ```
 
 The package root must contain `manifest.json`. All artifact paths are relative to this root and are rejected if

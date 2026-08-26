@@ -37,7 +37,7 @@ Result<NchwView> viewNchwFloat(const Tensor& tensor, const std::string& context)
     }
     const auto count = tensor.shape.elementCount();
     if (!count) return count.status();
-    if (count.value() * sizeof(float) != tensor.bytes.size()) {
+    if (count.value() * sizeof(float) != tensor.byteSize()) {
         return Status::error(ErrorCode::TensorShapeMismatch,
                              "Feature tensor byte size does not match shape", context);
     }

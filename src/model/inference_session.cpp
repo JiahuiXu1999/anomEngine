@@ -88,7 +88,7 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
     auto package = ModelPackage::load(modelPackage);
     if (!package) return package.status();
 
-    auto adapter = createAdapter(package.value());
+    auto adapter = createAdapter(package.value(), options.pluginDirectory);
     if (!adapter) return adapter.status();
 
     const auto& manifest = package.value().manifest();
@@ -128,7 +128,7 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
         backendConfig.enginePath = path.value();
     }
 
-    auto backend = createRuntimeBackend(backendConfig.backend);
+    auto backend = createRuntimeBackend(backendConfig.backend, options.pluginDirectory);
     if (!backend) return backend.status();
     auto loaded = backend.value()->load(backendConfig);
     if (!loaded) return loaded.status();

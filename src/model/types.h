@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <unordered_map>
@@ -17,7 +18,7 @@ namespace anom::model {
 
 enum class DataType { Float32, Float16, Int32, Int64, UInt8, Bool };
 enum class TensorLayout { NCHW, NHWC, NC, Unknown };
-enum class AlgorithmType { PatchCore, Padim, Direct, EfficientAD, DFKDE, SPADE };
+enum class AlgorithmType { PatchCore, Padim, Direct, EfficientAD, DFKDE, SPADE, Yolo };
 enum class GraphContract { FeaturePyramid, Prediction };
 enum class EngineLoadPolicy { EngineOnly, PreferEngine, BuildIfMissing };
 enum class RuntimeBackend { TensorRT, OnnxRuntime };
@@ -38,6 +39,12 @@ struct Tensor {
     TensorShape shape;
     std::vector<std::byte> bytes;
 
+    // Plugin adapters/backends may consume a read-only view owned by another
+    // module. Regular tensors continue to store their bytes in `bytes`.
+    const std::byte* externalData{nullptr};
+    std::size_t externalByteSize{0};
+    std::shared_ptr<void> externalOwner;
+
     template <typename T>
     T* data() {
         return reinterpret_cast<T*>(bytes.data());
@@ -45,10 +52,19 @@ struct Tensor {
 
     template <typename T>
     const T* data() const {
-        return reinterpret_cast<const T*>(bytes.data());
+        return reinterpret_cast<const T*>(externalData ? externalData : bytes.data());
     }
 
-    [[nodiscard]] std::size_t byteSize() const noexcept { return bytes.size(); }
+    void setExternalView(const void* data, std::size_t size,
+                         std::shared_ptr<void> owner = {}) noexcept {
+        externalData = static_cast<const std::byte*>(data);
+        externalByteSize = size;
+        externalOwner = std::move(owner);
+    }
+
+    [[nodiscard]] std::size_t byteSize() const noexcept {
+        return externalData ? externalByteSize : bytes.size();
+    }
 };
 
 using TensorMap = std::unordered_map<std::string, Tensor>;

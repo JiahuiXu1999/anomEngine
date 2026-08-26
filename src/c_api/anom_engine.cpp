@@ -1,0 +1,349 @@
+#include "anomEngine/anomEngine.h"
+
+#include "infrastructure/utf8_path.h"
+
+#include "model/inference_session.h"
+
+#include <opencv2/imgproc.hpp>
+
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <new>
+#include <string>
+#include <vector>
+
+#ifndef ANOM_ENGINE_VERSION_STRING
+#  define ANOM_ENGINE_VERSION_STRING "0.0.0"
+#endif
+
+using anom::model::ErrorCode;
+using anom::model::InferenceSession;
+using anom::model::LoadOptions;
+using anom::model::pathFromUtf8;
+using anom::model::Prediction;
+using anom::model::Status;
+
+thread_local std::string anomLastError;
+
+struct anom_session {
+    std::unique_ptr<InferenceSession> implementation;
+};
+
+namespace {
+
+struct PredictionStorage {
+    std::vector<float> rawMap;
+    std::vector<float> map;
+    std::vector<uint8_t> mask;
+    std::vector<anom_region_t> regions;
+    std::string modelId;
+    std::string modelVersion;
+};
+
+anom_status_t publicStatus(ErrorCode code) noexcept {
+    switch (code) {
+        case ErrorCode::Ok: return ANOM_STATUS_OK;
+        case ErrorCode::InvalidArgument: return ANOM_STATUS_INVALID_ARGUMENT;
+        case ErrorCode::InvalidImage: return ANOM_STATUS_INVALID_IMAGE;
+        case ErrorCode::IoError:
+        case ErrorCode::ArtifactMissing:
+        case ErrorCode::ArtifactPathEscape:
+        case ErrorCode::ArtifactCorrupt: return ANOM_STATUS_IO_ERROR;
+        case ErrorCode::InvalidManifest:
+        case ErrorCode::UnsupportedSchema:
+        case ErrorCode::TensorSignatureMismatch:
+        case ErrorCode::TensorShapeMismatch:
+        case ErrorCode::TensorTypeMismatch:
+        case ErrorCode::EngineIncompatible: return ANOM_STATUS_INVALID_MODEL_PACKAGE;
+        case ErrorCode::UnsupportedAlgorithm: return ANOM_STATUS_PLUGIN_NOT_FOUND;
+        case ErrorCode::OutOfMemory: return ANOM_STATUS_OUT_OF_MEMORY;
+        case ErrorCode::BackendFailure:
+        case ErrorCode::AdapterFailure:
+        case ErrorCode::CudaFailure:
+        case ErrorCode::NotInitialized: return ANOM_STATUS_INFERENCE_FAILED;
+        case ErrorCode::InternalError: return ANOM_STATUS_INTERNAL_ERROR;
+    }
+    return ANOM_STATUS_INTERNAL_ERROR;
+}
+
+anom_status_t fail(const Status& status) {
+    anomLastError = status.describe();
+    return publicStatus(status.code);
+}
+
+anom_status_t fail(anom_status_t status, std::string message) {
+    anomLastError = std::move(message);
+    return status;
+}
+
+bool validStruct(const void* value, uint32_t size, std::size_t required) {
+    return value && size >= required;
+}
+
+int channelsFor(anom_pixel_format_t format) {
+    switch (format) {
+        case ANOM_PIXEL_FORMAT_GRAY8: return 1;
+        case ANOM_PIXEL_FORMAT_BGR8:
+        case ANOM_PIXEL_FORMAT_RGB8: return 3;
+        case ANOM_PIXEL_FORMAT_BGRA8:
+        case ANOM_PIXEL_FORMAT_RGBA8: return 4;
+        default: return 0;
+    }
+}
+
+anom_status_t convertImage(const anom_image_t& source, cv::Mat& destination) {
+    if (source.struct_size < sizeof(anom_image_t) || !source.data ||
+        source.width <= 0 || source.height <= 0) {
+        return fail(ANOM_STATUS_INVALID_IMAGE, "Input image descriptor is invalid");
+    }
+    const int channels = channelsFor(source.pixel_format);
+    if (channels == 0) {
+        return fail(ANOM_STATUS_INVALID_IMAGE, "Input pixel format is unsupported");
+    }
+    if (source.width > std::numeric_limits<int32_t>::max() / channels) {
+        return fail(ANOM_STATUS_INVALID_IMAGE, "Input image row size overflows");
+    }
+    const int32_t minimumStride = source.width * channels;
+    const int32_t stride = source.stride_bytes == 0 ? minimumStride : source.stride_bytes;
+    if (stride < minimumStride) {
+        return fail(ANOM_STATUS_INVALID_IMAGE, "Input image stride is too small");
+    }
+    cv::Mat view(source.height, source.width, CV_MAKETYPE(CV_8U, channels),
+                 const_cast<uint8_t*>(source.data), static_cast<std::size_t>(stride));
+    if (source.pixel_format == ANOM_PIXEL_FORMAT_RGB8) {
+        cv::cvtColor(view, destination, cv::COLOR_RGB2BGR);
+    } else if (source.pixel_format == ANOM_PIXEL_FORMAT_RGBA8) {
+        cv::cvtColor(view, destination, cv::COLOR_RGBA2BGRA);
+    } else {
+        destination = view;
+    }
+    return ANOM_STATUS_OK;
+}
+
+template <typename T>
+void copyMat(const cv::Mat& source, std::vector<T>& destination) {
+    if (source.empty()) return;
+    destination.resize(static_cast<std::size_t>(source.rows) * source.cols);
+    for (int row = 0; row < source.rows; ++row) {
+        std::memcpy(destination.data() + static_cast<std::size_t>(row) * source.cols,
+                    source.ptr<T>(row), static_cast<std::size_t>(source.cols) * sizeof(T));
+    }
+}
+
+anom_status_t exportPrediction(Prediction source, anom_prediction_t* destination) {
+    if (!destination || destination->struct_size < sizeof(anom_prediction_t)) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    "Output prediction struct_size is incompatible");
+    }
+    if (destination->internal) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    "Output prediction must be released before it is reused");
+    }
+    try {
+        auto storage = std::make_unique<PredictionStorage>();
+        copyMat<float>(source.rawAnomalyMap, storage->rawMap);
+        copyMat<float>(source.anomalyMap, storage->map);
+        copyMat<uint8_t>(source.mask, storage->mask);
+        storage->regions.reserve(source.analysis.regions.size());
+        for (const auto& region : source.analysis.regions) {
+            storage->regions.push_back({region.boundingBox.x, region.boundingBox.y,
+                                        region.boundingBox.width, region.boundingBox.height,
+                                        region.maxLocation.x, region.maxLocation.y, region.area,
+                                        region.meanScore, region.maxScore});
+        }
+        storage->modelId = std::move(source.modelId);
+        storage->modelVersion = std::move(source.modelVersion);
+
+        const uint32_t structSize = destination->struct_size;
+        std::memset(destination, 0, sizeof(*destination));
+        destination->struct_size = structSize;
+        destination->raw_score = source.rawScore;
+        destination->score = source.score;
+        destination->is_anomalous = source.isAnomalous ? 1 : 0;
+        destination->raw_anomaly_map = storage->rawMap.empty() ? nullptr : storage->rawMap.data();
+        destination->anomaly_map = storage->map.empty() ? nullptr : storage->map.data();
+        destination->mask = storage->mask.empty() ? nullptr : storage->mask.data();
+        const cv::Mat* spatial = !source.anomalyMap.empty() ? &source.anomalyMap
+                              : !source.rawAnomalyMap.empty() ? &source.rawAnomalyMap
+                              : !source.mask.empty() ? &source.mask : nullptr;
+        if (spatial) {
+            destination->map_width = spatial->cols;
+            destination->map_height = spatial->rows;
+            destination->map_stride_elements = spatial->cols;
+            destination->mask_stride_bytes = source.mask.empty() ? 0 : source.mask.cols;
+        }
+        destination->regions = storage->regions.empty() ? nullptr : storage->regions.data();
+        destination->region_count = storage->regions.size();
+        destination->anomaly_area_ratio = source.analysis.anomalyAreaRatio;
+        destination->mean_score = source.analysis.meanScore;
+        destination->max_score = source.analysis.maxScore;
+        destination->has_map = source.analysis.hasMap ? 1 : 0;
+        destination->model_id_utf8 = storage->modelId.c_str();
+        destination->model_version_utf8 = storage->modelVersion.c_str();
+        destination->preprocess_ms = source.timing.preprocessMs;
+        destination->backend_ms = source.timing.backendMs;
+        destination->adapter_ms = source.timing.adapterMs;
+        destination->postprocess_ms = source.timing.postprocessMs;
+        destination->total_ms = source.timing.totalMs;
+        destination->internal = storage.release();
+        return ANOM_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while exporting prediction");
+    }
+}
+
+}  // namespace
+
+extern "C" ANOM_ENGINE_API uint32_t anom_get_abi_version(void) {
+    return ANOM_ENGINE_ABI_VERSION;
+}
+
+extern "C" ANOM_ENGINE_API const char* anom_get_version_string(void) {
+    return ANOM_ENGINE_VERSION_STRING;
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_session_create(
+    const char* modelPackage, const anom_session_options_t* options,
+    anom_session_t** outSession) {
+    anomLastError.clear();
+    if (!outSession) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session create arguments are null");
+    }
+    *outSession = nullptr;
+    if (!modelPackage) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session create arguments are null");
+    }
+    if (options && options->struct_size < sizeof(anom_session_options_t)) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    "Session options struct_size is incompatible");
+    }
+    try {
+        LoadOptions converted;
+        if (options) {
+            converted.warmup = options->warmup != 0;
+            if (options->plugin_directory_utf8 && *options->plugin_directory_utf8) {
+                converted.pluginDirectory = pathFromUtf8(options->plugin_directory_utf8);
+            }
+        }
+        auto loaded = InferenceSession::load(pathFromUtf8(modelPackage), converted);
+        if (!loaded) return fail(loaded.status());
+        auto session = std::make_unique<anom_session>();
+        session->implementation = std::move(loaded.value());
+        *outSession = session.release();
+        return ANOM_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while creating session");
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INTERNAL_ERROR, error.what());
+    }
+}
+
+extern "C" ANOM_ENGINE_API void anom_session_destroy(anom_session_t* session) {
+    delete session;
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_session_warmup(anom_session_t* session) {
+    anomLastError.clear();
+    if (!session) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session is null");
+    try {
+        auto warmed = session->implementation->warmup();
+        return warmed ? ANOM_STATUS_OK : fail(warmed.status());
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INTERNAL_ERROR, error.what());
+    }
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_model_info(
+    const anom_session_t* session, anom_model_info_t* outInfo) {
+    anomLastError.clear();
+    if (!session || !outInfo || outInfo->struct_size < sizeof(anom_model_info_t)) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Model info arguments are invalid");
+    }
+    const uint32_t structSize = outInfo->struct_size;
+    std::memset(outInfo, 0, sizeof(*outInfo));
+    outInfo->struct_size = structSize;
+    const auto& info = session->implementation->modelInfo();
+    outInfo->model_id_utf8 = info.id.c_str();
+    outInfo->model_version_utf8 = info.version.c_str();
+    outInfo->algorithm_utf8 = anom::model::toString(info.algorithm);
+    outInfo->backend_utf8 = anom::model::toString(info.runtimeBackend);
+    outInfo->execution_provider_utf8 = info.executionProvider.c_str();
+    return ANOM_STATUS_OK;
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_session_predict(
+    anom_session_t* session, const anom_image_t* image,
+    anom_prediction_t* outPrediction) {
+    return anom_session_predict_batch(session, image, 1, outPrediction);
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_session_predict_batch(
+    anom_session_t* session, const anom_image_t* images, size_t imageCount,
+    anom_prediction_t* outPredictions) {
+    anomLastError.clear();
+    if (!session || !images || imageCount == 0 || !outPredictions) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Batch prediction arguments are invalid");
+    }
+    for (std::size_t i = 0; i < imageCount; ++i) {
+        if (images[i].struct_size < sizeof(anom_image_t) ||
+            outPredictions[i].struct_size < sizeof(anom_prediction_t) ||
+            outPredictions[i].internal) {
+            return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                        "Batch image or prediction descriptor is incompatible");
+        }
+    }
+    try {
+        std::vector<cv::Mat> converted;
+        converted.reserve(imageCount);
+        for (std::size_t i = 0; i < imageCount; ++i) {
+            cv::Mat image;
+            const anom_status_t status = convertImage(images[i], image);
+            if (status != ANOM_STATUS_OK) return status;
+            converted.push_back(std::move(image));
+        }
+        auto predicted = session->implementation->predictBatch(converted);
+        if (!predicted) return fail(predicted.status());
+        if (predicted.value().size() != imageCount) {
+            return fail(ANOM_STATUS_INTERNAL_ERROR,
+                        "Inference returned an unexpected prediction count");
+        }
+        std::size_t exported = 0;
+        for (; exported < imageCount; ++exported) {
+            const anom_status_t status =
+                exportPrediction(std::move(predicted.value()[exported]), &outPredictions[exported]);
+            if (status != ANOM_STATUS_OK) {
+                for (std::size_t i = 0; i < exported; ++i)
+                    anom_prediction_release(&outPredictions[i]);
+                return status;
+            }
+        }
+        return ANOM_STATUS_OK;
+    } catch (const cv::Exception& error) {
+        return fail(ANOM_STATUS_INVALID_IMAGE, error.what());
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory during batch prediction");
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INTERNAL_ERROR, error.what());
+    }
+}
+
+extern "C" ANOM_ENGINE_API void anom_prediction_release(anom_prediction_t* prediction) {
+    if (!prediction) return;
+    delete static_cast<PredictionStorage*>(prediction->internal);
+    const uint32_t structSize = prediction->struct_size;
+    std::memset(prediction, 0, sizeof(*prediction));
+    prediction->struct_size = structSize;
+}
+
+extern "C" ANOM_ENGINE_API size_t anom_get_last_error(char* buffer, size_t bufferSize) {
+    const std::size_t required = anomLastError.size() + 1;
+    if (buffer && bufferSize != 0) {
+        const std::size_t count = std::min(anomLastError.size(), bufferSize - 1);
+        std::memcpy(buffer, anomLastError.data(), count);
+        buffer[count] = '\0';
+    }
+    return required;
+}

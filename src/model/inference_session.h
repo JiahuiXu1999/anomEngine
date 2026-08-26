@@ -19,6 +19,7 @@ struct LoadOptions {
     std::optional<OrtExecutionProvider> ortProvider;
     std::optional<EngineLoadPolicy> engineLoadPolicy;
     std::optional<bool> fp16;
+    std::filesystem::path pluginDirectory;
     bool warmup{false};
 };
 

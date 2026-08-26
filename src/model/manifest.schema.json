@@ -14,7 +14,7 @@
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "minLength": 1 },
-        "algorithm": { "enum": ["patchcore", "padim", "direct", "efficientad", "dfkde", "spade"] }
+        "algorithm": { "enum": ["patchcore", "padim", "direct", "efficientad", "dfkde", "spade", "yolo"] }
       }
     },
     "graph_contract": { "enum": ["feature_pyramid", "prediction"] },
@@ -155,6 +155,15 @@
           "algorithm": { "$ref": "#/$defs/spade" }
         }
       }
+    },
+    {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "yolo" } } } } },
+      "then": {
+        "properties": {
+          "graph_contract": { "const": "prediction" },
+          "algorithm": { "$ref": "#/$defs/yolo" }
+        }
+      }
     }
   ],
   "$defs": {
@@ -251,6 +260,17 @@
         },
         "num_neighbors": { "type": "integer", "minimum": 1 },
         "gaussian_sigma": { "type": "number", "minimum": 0 }
+      }
+    },
+    "yolo": {
+      "type": "object",
+      "required": ["type", "num_classes"],
+      "properties": {
+        "type": { "const": "yolo" },
+        "detection_semantic": { "type": "string", "minLength": 1 },
+        "num_classes": { "type": "integer", "minimum": 1 },
+        "conf_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "nms_threshold": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     }
   }

@@ -198,7 +198,7 @@ public:
 
                 inputNames.push_back(spec.name.c_str());
                 inputValues.emplace_back(Ort::Value::CreateTensor(
-                    memoryInfo, const_cast<std::byte*>(tensor.bytes.data()), tensor.byteSize(),
+                    memoryInfo, const_cast<std::byte*>(tensor.data<std::byte>()), tensor.byteSize(),
                     tensor.shape.dims.data(), tensor.shape.dims.size(), toOrtType(tensor.dtype)));
             }
 

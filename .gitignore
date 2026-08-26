@@ -5,3 +5,17 @@
 !/.gitignore
 !/src/
 !/src/**
+
+# SDK build contract and the installed public C header are source artifacts.
+!/CMakeLists.txt
+!/CMakePresets.json
+!/include/
+!/include/anomEngine/
+!/include/anomEngine/anomEngine.h
+
+# Keep the new ABI boundary tests while preserving the existing policy for
+# other workspace-local test data.
+!/tests/
+/tests/*
+!/tests/c_api_contract_tests.cpp
+!/tests/c_header_compile_test.c

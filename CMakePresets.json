@@ -1,0 +1,193 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "project-defaults",
+            "hidden": true,
+            "cacheVariables": {
+                "ANOM_ENABLE_ONNXRUNTIME": "ON",
+                "ANOM_ORT_ENABLE_CUDA": "OFF",
+                "ANOM_ENABLE_STRICT_WARNINGS": "ON",
+                "BUILD_TESTING": "ON"
+            }
+        },
+        {
+            "name": "windows-msvc-ninja-release",
+            "displayName": "Windows MSVC + Ninja (Release)",
+            "inherits": "project-defaults",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/windows-msvc-ninja-release",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "cl",
+                "CMAKE_CXX_COMPILER": "cl",
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "windows-msvc-ninja-relwithdebinfo",
+            "displayName": "Windows MSVC + Ninja (RelWithDebInfo)",
+            "inherits": "project-defaults",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/windows-msvc-ninja-relwithdebinfo",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "cl",
+                "CMAKE_CXX_COMPILER": "cl",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+            }
+        },
+        {
+            "name": "windows-vs2022",
+            "displayName": "Windows Visual Studio 2022",
+            "inherits": "project-defaults",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "generator": "Visual Studio 17 2022",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/build/windows-vs2022"
+        },
+        {
+            "name": "linux-gcc-ninja-release",
+            "displayName": "Linux GCC + Ninja (Release)",
+            "inherits": "project-defaults",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/linux-gcc-ninja-release",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "linux-gcc-ninja-relwithdebinfo",
+            "displayName": "Linux GCC + Ninja (RelWithDebInfo)",
+            "inherits": "project-defaults",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/linux-gcc-ninja-relwithdebinfo",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+            }
+        },
+        {
+            "name": "linux-clang-sanitizers",
+            "displayName": "Linux Clang + Ninja (ASan/UBSan)",
+            "inherits": "project-defaults",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/linux-clang-sanitizers",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+                "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+                "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+                "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "windows-msvc-ninja-release",
+            "configurePreset": "windows-msvc-ninja-release"
+        },
+        {
+            "name": "windows-msvc-ninja-relwithdebinfo",
+            "configurePreset": "windows-msvc-ninja-relwithdebinfo"
+        },
+        {
+            "name": "windows-vs2022-release",
+            "configurePreset": "windows-vs2022",
+            "configuration": "Release"
+        },
+        {
+            "name": "windows-vs2022-relwithdebinfo",
+            "configurePreset": "windows-vs2022",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "linux-gcc-ninja-release",
+            "configurePreset": "linux-gcc-ninja-release"
+        },
+        {
+            "name": "linux-gcc-ninja-relwithdebinfo",
+            "configurePreset": "linux-gcc-ninja-relwithdebinfo"
+        },
+        {
+            "name": "linux-clang-sanitizers",
+            "configurePreset": "linux-clang-sanitizers"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "windows-msvc-ninja-release",
+            "configurePreset": "windows-msvc-ninja-release",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "windows-msvc-ninja-relwithdebinfo",
+            "configurePreset": "windows-msvc-ninja-relwithdebinfo",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "windows-vs2022-release",
+            "configurePreset": "windows-vs2022",
+            "configuration": "Release",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "windows-vs2022-relwithdebinfo",
+            "configurePreset": "windows-vs2022",
+            "configuration": "RelWithDebInfo",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "linux-gcc-ninja-release",
+            "configurePreset": "linux-gcc-ninja-release",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "linux-gcc-ninja-relwithdebinfo",
+            "configurePreset": "linux-gcc-ninja-relwithdebinfo",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "linux-clang-sanitizers",
+            "configurePreset": "linux-clang-sanitizers",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}

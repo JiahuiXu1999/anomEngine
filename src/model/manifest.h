@@ -143,9 +143,23 @@ struct SPADEConfig {
     float gaussianSigma{4.0F};
 };
 
+// YOLO deploys as a supervised object detector. The exported graph returns the
+// raw anchor-free detection head (e.g. YOLOv8 [N, 4+C, M]): the first four rows
+// are already-decoded boxes (cx, cy, w, h in absolute input pixels) and the
+// remaining C rows are per-class sigmoid scores. The adapter filters by
+// confidence, runs non-maximum suppression, and maps the surviving boxes to an
+// anomaly prediction — a detected box means "anomalous", with the highest
+// confidence as the image score and the box regions painted into the anomaly map.
+struct YoloConfig {
+    std::string detectionSemantic{"output"};
+    int numClasses{1};
+    float confThreshold{0.25F};
+    float nmsThreshold{0.45F};
+};
+
 using AlgorithmConfig =
     std::variant<PatchCoreConfig, PadimConfig, DirectConfig, EfficientADConfig,
-                 DFKDEConfig, SPADEConfig>;
+                 DFKDEConfig, SPADEConfig, YoloConfig>;
 
 struct ModelManifest {
     int schemaVersion{1};

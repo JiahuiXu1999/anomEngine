@@ -18,6 +18,8 @@ public:
         const cv::Size& modelInputSize) const = 0;
 };
 
-Result<std::unique_ptr<IModelAdapter>> createAdapter(const ModelPackage& package);
+Result<std::unique_ptr<IModelAdapter>> createAdapter(
+    const ModelPackage& package,
+    const std::filesystem::path& pluginDirectory = {});
 
 }  // namespace anom::model

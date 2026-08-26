@@ -1,5 +1,6 @@
 #include "model/manifest.h"
 
+#include "infrastructure/utf8_path.h"
 #include "infrastructure/json.h"
 #include "infrastructure/sha256.h"
 
@@ -121,7 +122,7 @@ T optionalOr(const Reader& reader, const std::string& key, T fallback,
 
 std::filesystem::path optionalPath(const Reader& reader, const std::string& key) {
     const auto value = reader.optional(key);
-    return value ? std::filesystem::path(value->string()) : std::filesystem::path{};
+    return value ? pathFromUtf8(value->string()) : std::filesystem::path{};
 }
 
 AlgorithmType parseAlgorithm(const std::string& value) {
@@ -131,6 +132,7 @@ AlgorithmType parseAlgorithm(const std::string& value) {
     if (value == "efficientad") return AlgorithmType::EfficientAD;
     if (value == "dfkde") return AlgorithmType::DFKDE;
     if (value == "spade") return AlgorithmType::SPADE;
+    if (value == "yolo") return AlgorithmType::Yolo;
     throw ManifestError("Unsupported algorithm '" + value + "'", "$.model.algorithm");
 }
 
@@ -478,6 +480,19 @@ ModelManifest parseManifest(const json::Value& value) {
                                 "$.algorithm.indexes");
         }
         manifest.algorithmConfig = std::move(config);
+    } else if (manifest.algorithm == AlgorithmType::Yolo) {
+        YoloConfig config;
+        config.detectionSemantic = optionalOr<std::string>(algorithm, "detection_semantic", "output", &Reader::string);
+        config.numClasses = algorithm.required("num_classes").integer();
+        config.confThreshold = optionalOr<float>(algorithm, "conf_threshold", 0.25F, &Reader::real);
+        config.nmsThreshold = optionalOr<float>(algorithm, "nms_threshold", 0.45F, &Reader::real);
+        requirePositive(config.numClasses, "$.algorithm.num_classes");
+        requireUnit(config.confThreshold, "$.algorithm.conf_threshold");
+        requireUnit(config.nmsThreshold, "$.algorithm.nms_threshold");
+        if (config.detectionSemantic.empty()) {
+            throw ManifestError("detection_semantic must not be empty", "$.algorithm.detection_semantic");
+        }
+        manifest.algorithmConfig = std::move(config);
     } else {
         DirectConfig config;
         config.scoreSemantic = optionalOr<std::string>(algorithm, "score_semantic", "pred_score", &Reader::string);
@@ -487,8 +502,9 @@ ModelManifest parseManifest(const json::Value& value) {
 
     if (manifest.graphContract == GraphContract::Prediction &&
         manifest.algorithm != AlgorithmType::Direct &&
-        manifest.algorithm != AlgorithmType::EfficientAD) {
-        throw ManifestError("prediction graph contract must use the direct or efficientad adapter",
+        manifest.algorithm != AlgorithmType::EfficientAD &&
+        manifest.algorithm != AlgorithmType::Yolo) {
+        throw ManifestError("prediction graph contract must use the direct, efficientad or yolo adapter",
                             "$.graph_contract");
     }
     if (manifest.graphContract == GraphContract::FeaturePyramid &&

@@ -83,6 +83,7 @@ const char* toString(AlgorithmType type) noexcept {
         case AlgorithmType::EfficientAD: return "efficientad";
         case AlgorithmType::DFKDE: return "dfkde";
         case AlgorithmType::SPADE: return "spade";
+        case AlgorithmType::Yolo: return "yolo";
     }
     return "unknown";
 }

@@ -223,7 +223,8 @@ public:
 
         for (const auto& spec : signature_.inputs) {
             const Tensor& tensor = inputs.at(spec.name);
-            const auto error = cudaMemcpyAsync(buffers_.at(spec.name).device, tensor.bytes.data(), tensor.byteSize(),
+            const auto error = cudaMemcpyAsync(buffers_.at(spec.name).device,
+                                               tensor.data<std::byte>(), tensor.byteSize(),
                                                cudaMemcpyHostToDevice, stream_);
             if (error != cudaSuccess) return cudaStatus(error, "cudaMemcpyAsync H2D for " + spec.name);
         }

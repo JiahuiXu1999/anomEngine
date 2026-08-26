@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "bottle-yolo",
+    "version": "1.0.0",
+    "algorithm": "yolo"
+  },
+  "graph_contract": "prediction",
+  "input": {
+    "tensor": "images",
+    "layout": "NCHW",
+    "color": "RGB",
+    "size": [640, 640],
+    "mean": [0.0, 0.0, 0.0],
+    "std": [1.0, 1.0, 1.0]
+  },
+  "runtime": {
+    "onnx": "yolo_detector.onnx",
+    "engine": "cache/yolo_detector.engine",
+    "load_policy": "prefer_engine",
+    "fp16": false,
+    "max_batch_size": 4,
+    "workspace_mb": 2048
+  },
+  "outputs": {
+    "detections": "output0"
+  },
+  "algorithm": {
+    "type": "yolo",
+    "detection_semantic": "detections",
+    "num_classes": 1,
+    "conf_threshold": 0.25,
+    "nms_threshold": 0.45
+  },
+  "postprocess": {
+    "normalize": false,
+    "threshold": true,
+    "image_threshold": 0.5,
+    "pixel_threshold": 0.5,
+    "image_sensitivity": 0.5,
+    "pixel_sensitivity": 0.5
+  }
+}
