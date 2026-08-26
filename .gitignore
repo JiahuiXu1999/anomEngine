@@ -1,21 +1,27 @@
-# 只跟踪 src/ 目录，其余全部忽略
-/*
+# Build trees and CMake-generated files
+/build*/
+/cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
 
-# 保留 .gitignore 与 src/
-!/.gitignore
-!/src/
-!/src/**
+# Locally installed third-party SDKs
+/libs/
 
-# SDK build contract and the installed public C header are source artifacts.
-!/CMakeLists.txt
-!/CMakePresets.json
-!/include/
-!/include/anomEngine/
-!/include/anomEngine/anomEngine.h
+# Local datasets, model packages, and deployment artifacts
+/deployment/
 
-# Keep the new ABI boundary tests while preserving the existing policy for
-# other workspace-local test data.
-!/tests/
-/tests/*
-!/tests/c_api_contract_tests.cpp
-!/tests/c_header_compile_test.c
+# Editor and assistant-local state
+/.clangd
+/.vscode/
+/.idea/
+/.workbuddy/
+*.user
+*.suo
+
+# Generated local reports and previews
+/output.png
+/tensorrt-image-inference-flow.html
+
+# Platform noise
+.DS_Store
+Thumbs.db

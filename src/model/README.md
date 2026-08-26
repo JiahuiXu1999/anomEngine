@@ -147,18 +147,19 @@ See `manifest.schema.json`, `examples/patchcore.manifest.json`, `examples/padim.
 The checked-in presets build and test the complete SDK:
 
 ```powershell
-cmake --preset clang-cl-ninja-release
-cmake --build --preset release
-ctest --preset release
+cmake --preset windows-msvc-ninja-release
+cmake --build --preset windows-msvc-ninja-release
+ctest --preset windows-msvc-ninja-release
 ```
 
-The `debug` preset intentionally uses `RelWithDebInfo`: the bundled FAISS and ORT binaries are Release-CRT
-packages, so a true `/MDd` Debug executable is not ABI-safe with them. It still emits debugging information.
+The `RelWithDebInfo` presets emit debugging information while retaining a Release-compatible CRT. On Windows,
+avoid a true `/MDd` Debug build when using prebuilt FAISS or ORT packages that were compiled against the Release
+CRT, because mixing those runtimes is not ABI-safe.
 
 Place an official C/C++ ONNX Runtime distribution under `libs/onnxruntime`, or point CMake at one explicitly:
 
 ```powershell
-cmake -S . -B build -DONNXRUNTIME_ROOT=D:/sdk/onnxruntime
+cmake -S . -B build -DANOM_ONNXRUNTIME_ROOT=D:/sdk/onnxruntime
 ```
 
 The backend is enabled by default and configuration fails early when its headers, import library, or Windows DLL

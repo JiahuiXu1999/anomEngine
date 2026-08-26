@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "ort-direct-test",
+    "version": "1.0.0",
+    "algorithm": "direct"
+  },
+  "graph_contract": "prediction",
+  "input": {
+    "tensor": "input",
+    "layout": "NCHW",
+    "color": "RGB",
+    "size": [2, 2],
+    "mean": [0.0, 0.0, 0.0],
+    "std": [1.0, 1.0, 1.0]
+  },
+  "runtime": {
+    "backend": "onnxruntime",
+    "onnx": "direct_constant.onnx",
+    "provider": "cpu",
+    "strict_provider": true,
+    "max_batch_size": 1,
+    "intra_op_threads": 1,
+    "inter_op_threads": 1
+  },
+  "outputs": {
+    "pred_score": "score",
+    "anomaly_map": "map"
+  },
+  "algorithm": {
+    "type": "direct"
+  },
+  "postprocess": {
+    "normalize": false,
+    "threshold": false
+  }
+}
