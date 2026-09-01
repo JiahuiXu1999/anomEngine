@@ -35,13 +35,17 @@ public:
     [[nodiscard]] const std::string& asString() const;
     [[nodiscard]] const Array& asArray() const;
     [[nodiscard]] const Object& asObject() const;
+    [[nodiscard]] Array& asArray();
+    [[nodiscard]] Object& asObject();
 
     [[nodiscard]] const Value* find(const std::string& key) const;
+    [[nodiscard]] Value* find(const std::string& key);
 
 private:
     std::variant<std::nullptr_t, bool, double, std::string, Array, Object> storage_{nullptr};
 };
 
 Result<Value> parse(const std::string& text);
+std::string serialize(const Value& value, bool pretty = true);
 
 }  // namespace anom::model::json

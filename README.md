@@ -41,6 +41,9 @@ application
 See [`src/model/README.md`](src/model/README.md) for the SDK contract, model
 package format, runtime behavior, and a complete C API example. The formal
 manifest schema and examples live in [`src/model`](src/model).
+The model validation, atomic package assembly, capability discovery, and
+PatchCore/PaDiM fitting APIs are documented in
+[`docs/cabi-model-lifecycle.md`](docs/cabi-model-lifecycle.md).
 
 ## Requirements
 

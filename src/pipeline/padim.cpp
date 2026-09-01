@@ -17,10 +17,18 @@ namespace {
 
 constexpr std::array<char, 8> kMagic{'A', 'N', 'P', 'A', 'D', 'I', 'M', '\0'};
 constexpr std::uint32_t kStatisticsVersion = 1;
+constexpr std::array<char, 8> kCheckpointMagic{'A', 'N', 'P', 'D', 'C', 'K', 'P', '\0'};
+constexpr std::uint32_t kCheckpointVersion = 1;
 
 template <typename T>
 bool writeValue(std::ofstream& stream, const T& value) {
     stream.write(reinterpret_cast<const char*>(&value), sizeof(T));
+    return static_cast<bool>(stream);
+}
+
+template <typename T>
+bool readValue(std::ifstream& stream, T& value) {
+    stream.read(reinterpret_cast<char*>(&value), sizeof(T));
     return static_cast<bool>(stream);
 }
 
@@ -220,6 +228,119 @@ Result<void> PadimPipeline::saveArtifacts(
                              "Unable to write PaDiM statistics artifact",
                              statisticsPath.string());
     }
+    return {};
+}
+
+Result<void> PadimPipeline::saveCheckpoint(
+    const std::filesystem::path& path) const {
+    auto valid = validateConfig();
+    if (!valid) return valid.status();
+    if (sampleCount_ == 0 || sums_.empty() || secondMoments_.empty()) {
+        return Status::error(ErrorCode::NotInitialized,
+                             "PaDiM pipeline contains no training samples");
+    }
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to create PaDiM checkpoint", path.string());
+    }
+    stream.write(kCheckpointMagic.data(), static_cast<std::streamsize>(kCheckpointMagic.size()));
+    const std::uint32_t dimension = static_cast<std::uint32_t>(config_.embeddingDimension);
+    const std::uint32_t height = static_cast<std::uint32_t>(config_.featureHeight);
+    const std::uint32_t width = static_cast<std::uint32_t>(config_.featureWidth);
+    const std::uint64_t samples = static_cast<std::uint64_t>(sampleCount_);
+    const std::uint64_t sumCount = static_cast<std::uint64_t>(sums_.size());
+    const std::uint64_t momentCount = static_cast<std::uint64_t>(secondMoments_.size());
+    if (!writeValue(stream, kCheckpointVersion) || !writeValue(stream, dimension) ||
+        !writeValue(stream, height) || !writeValue(stream, width) ||
+        !writeValue(stream, samples) || !writeValue(stream, sumCount) ||
+        !writeValue(stream, momentCount)) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to write PaDiM checkpoint header", path.string());
+    }
+    stream.write(reinterpret_cast<const char*>(config_.channelIndices.data()),
+                 static_cast<std::streamsize>(config_.channelIndices.size() * sizeof(std::int32_t)));
+    stream.write(reinterpret_cast<const char*>(sums_.data()),
+                 static_cast<std::streamsize>(sums_.size() * sizeof(double)));
+    stream.write(reinterpret_cast<const char*>(secondMoments_.data()),
+                 static_cast<std::streamsize>(secondMoments_.size() * sizeof(double)));
+    if (!stream) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to write PaDiM checkpoint", path.string());
+    }
+    return {};
+}
+
+Result<void> PadimPipeline::loadCheckpoint(
+    const std::filesystem::path& path) {
+    auto valid = validateConfig();
+    if (!valid) return valid.status();
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to open PaDiM checkpoint", path.string());
+    }
+    std::array<char, 8> magic{};
+    std::uint32_t version = 0, dimension = 0, height = 0, width = 0;
+    std::uint64_t samples = 0, sumCount = 0, momentCount = 0;
+    stream.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+    if (!stream || !readValue(stream, version) || !readValue(stream, dimension) ||
+        !readValue(stream, height) || !readValue(stream, width) ||
+        !readValue(stream, samples) || !readValue(stream, sumCount) ||
+        !readValue(stream, momentCount) || magic != kCheckpointMagic ||
+        version != kCheckpointVersion ||
+        dimension != static_cast<std::uint32_t>(config_.embeddingDimension) ||
+        height != static_cast<std::uint32_t>(config_.featureHeight) ||
+        width != static_cast<std::uint32_t>(config_.featureWidth) || samples == 0 ||
+        dimension == 0 || height == 0 || width == 0) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "PaDiM checkpoint header is incompatible", path.string());
+    }
+    const std::size_t locations = static_cast<std::size_t>(height) * width;
+    if (locations > std::numeric_limits<std::size_t>::max() / dimension) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "PaDiM checkpoint dimensions overflow", path.string());
+    }
+    const std::size_t expectedSums = locations * dimension;
+    if (expectedSums > std::numeric_limits<std::size_t>::max() / dimension) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "PaDiM checkpoint dimensions overflow", path.string());
+    }
+    const std::size_t expectedMoments = expectedSums * dimension;
+    if (sumCount != expectedSums || momentCount != expectedMoments ||
+        samples > std::numeric_limits<std::size_t>::max()) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "PaDiM checkpoint dimensions are invalid", path.string());
+    }
+    std::vector<std::int32_t> indices(dimension);
+    std::vector<double> sums(expectedSums);
+    std::vector<double> moments(expectedMoments);
+    stream.read(reinterpret_cast<char*>(indices.data()),
+                static_cast<std::streamsize>(indices.size() * sizeof(std::int32_t)));
+    stream.read(reinterpret_cast<char*>(sums.data()),
+                static_cast<std::streamsize>(sums.size() * sizeof(double)));
+    stream.read(reinterpret_cast<char*>(moments.data()),
+                static_cast<std::streamsize>(moments.size() * sizeof(double)));
+    if (!stream || stream.peek() != std::ifstream::traits_type::eof() ||
+        indices != config_.channelIndices) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "PaDiM checkpoint payload is incompatible", path.string());
+    }
+    for (const double value : sums) {
+        if (!std::isfinite(value)) {
+            return Status::error(ErrorCode::ArtifactCorrupt,
+                                 "PaDiM checkpoint contains non-finite sums", path.string());
+        }
+    }
+    for (const double value : moments) {
+        if (!std::isfinite(value)) {
+            return Status::error(ErrorCode::ArtifactCorrupt,
+                                 "PaDiM checkpoint contains non-finite moments", path.string());
+        }
+    }
+    sampleCount_ = static_cast<std::size_t>(samples);
+    sums_ = std::move(sums);
+    secondMoments_ = std::move(moments);
     return {};
 }
 

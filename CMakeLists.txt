@@ -300,9 +300,31 @@ anom_apply_project_defaults(anom_internal)
 
 add_library(anom_engine SHARED)
 add_library(anom::engine ALIAS anom_engine)
-target_sources(anom_engine PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/anom_engine.cpp")
+target_sources(anom_engine PRIVATE
+    "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/anom_engine.cpp"
+    "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/model_management.cpp")
+if(ANOM_BUILD_ALGO_PATCHCORE OR ANOM_BUILD_ALGO_PADIM)
+    target_sources(anom_engine PRIVATE
+        "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/feature_utils.cpp")
+endif()
+if(ANOM_BUILD_ALGO_PATCHCORE)
+    target_sources(anom_engine PRIVATE
+        "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/patchcore.cpp")
+    target_link_libraries(anom_engine PRIVATE anom::faiss anom::faiss_c)
+endif()
+if(ANOM_BUILD_ALGO_PADIM)
+    target_sources(anom_engine PRIVATE
+        "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/padim.cpp")
+endif()
 target_compile_definitions(anom_engine PRIVATE
-    ANOM_ENGINE_BUILD=1 ANOM_ENGINE_VERSION_STRING="${PROJECT_VERSION}")
+    ANOM_ENGINE_BUILD=1 ANOM_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
+    ANOM_ENGINE_HAS_PATCHCORE=$<BOOL:${ANOM_BUILD_ALGO_PATCHCORE}>
+    ANOM_ENGINE_HAS_PADIM=$<BOOL:${ANOM_BUILD_ALGO_PADIM}>
+    ANOM_ENGINE_HAS_DIRECT=$<BOOL:${ANOM_BUILD_ALGO_DIRECT}>
+    ANOM_ENGINE_HAS_EFFICIENTAD=$<BOOL:${ANOM_BUILD_ALGO_EFFICIENTAD}>
+    ANOM_ENGINE_HAS_DFKDE=$<BOOL:${ANOM_BUILD_ALGO_DFKDE}>
+    ANOM_ENGINE_HAS_SPADE=$<BOOL:${ANOM_BUILD_ALGO_SPADE}>
+    ANOM_ENGINE_HAS_YOLO=$<BOOL:${ANOM_BUILD_ALGO_YOLO}>)
 target_include_directories(anom_engine
     PUBLIC
         "$<BUILD_INTERFACE:${ANOM_PUBLIC_INCLUDE_ROOT}>"
@@ -470,6 +492,9 @@ if(BUILD_TESTING)
         target_link_libraries(c_api_contract_tests PRIVATE anom::engine)
         target_compile_definitions(c_api_contract_tests PRIVATE ANOM_TEST_DATA_DIR="${ANOM_TEST_ROOT}/data")
         add_dependencies(c_api_contract_tests anom_backend_onnxruntime anom_algo_direct)
+        if(ANOM_BUILD_ALGO_PATCHCORE)
+            add_dependencies(c_api_contract_tests anom_algo_patchcore)
+        endif()
         anom_apply_project_defaults(c_api_contract_tests)
         add_test(NAME c_api_contract_tests COMMAND c_api_contract_tests)
     endif()

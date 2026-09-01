@@ -34,6 +34,8 @@ public:
     Result<void> addEmbedding(const Tensor& fullEmbedding);
     Result<void> saveArtifacts(const std::filesystem::path& statisticsPath,
                                const std::filesystem::path& channelIndicesPath) const;
+    Result<void> saveCheckpoint(const std::filesystem::path& path) const;
+    Result<void> loadCheckpoint(const std::filesystem::path& path);
 
     void clear();
     [[nodiscard]] std::size_t sampleCount() const noexcept { return sampleCount_; }

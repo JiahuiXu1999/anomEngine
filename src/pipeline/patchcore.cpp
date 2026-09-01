@@ -6,14 +6,33 @@
 #include <faiss/index_io.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
+#include <fstream>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <stdexcept>
 
 namespace anom::model {
 namespace {
+
+constexpr std::array<char, 8> kCheckpointMagic{'A', 'N', 'P', 'C', 'K', 'P', 'T', '\0'};
+constexpr std::uint32_t kCheckpointVersion = 1;
+
+template <typename T>
+bool writeValue(std::ofstream& stream, const T& value) {
+    stream.write(reinterpret_cast<const char*>(&value), sizeof(T));
+    return static_cast<bool>(stream);
+}
+
+template <typename T>
+bool readValue(std::ifstream& stream, T& value) {
+    stream.read(reinterpret_cast<char*>(&value), sizeof(T));
+    return static_cast<bool>(stream);
+}
 
 Result<void> validateConfig(const PatchCorePipelineConfig& config) {
     if (config.embeddingDimension <= 0) {
@@ -209,6 +228,33 @@ Result<std::vector<float>> PatchCorePipeline::buildCoreset() const {
     return coreset;
 }
 
+Result<std::size_t> PatchCorePipeline::loadMemoryBank(
+    const std::filesystem::path& path) {
+    auto valid = validateConfig(config_);
+    if (!valid) return valid.status();
+    try {
+        std::unique_ptr<faiss::Index> index(faiss::read_index(path.string().c_str()));
+        if (!index || index->d != config_.embeddingDimension || index->ntotal <= 0) {
+            return Status::error(ErrorCode::ArtifactCorrupt,
+                                 "PatchCore memory bank is incompatible", path.string());
+        }
+        const std::size_t count = static_cast<std::size_t>(index->ntotal);
+        if (count > std::numeric_limits<std::size_t>::max() /
+                        static_cast<std::size_t>(config_.embeddingDimension)) {
+            return Status::error(ErrorCode::ArtifactCorrupt,
+                                 "PatchCore memory bank dimensions overflow", path.string());
+        }
+        std::vector<float> loaded(count * static_cast<std::size_t>(config_.embeddingDimension));
+        index->reconstruct_n(0, index->ntotal, loaded.data());
+        auto added = addFeatures(loaded, count);
+        if (!added) return added.status();
+        return count;
+    } catch (const std::exception& error) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "Unable to load PatchCore memory bank", error.what());
+    }
+}
+
 Result<std::size_t> PatchCorePipeline::saveMemoryBank(
     const std::filesystem::path& path) const {
     auto coreset = buildCoreset();
@@ -228,6 +274,75 @@ Result<std::size_t> PatchCorePipeline::saveMemoryBank(
                              "Unable to save PatchCore memory bank", error.what());
     }
     return count;
+}
+
+Result<void> PatchCorePipeline::saveCheckpoint(
+    const std::filesystem::path& path) const {
+    auto valid = validateConfig(config_);
+    if (!valid) return valid.status();
+    if (features_.empty()) {
+        return Status::error(ErrorCode::NotInitialized,
+                             "PatchCore pipeline contains no training features");
+    }
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to create PatchCore checkpoint", path.string());
+    }
+    stream.write(kCheckpointMagic.data(), static_cast<std::streamsize>(kCheckpointMagic.size()));
+    const std::int32_t dimension = config_.embeddingDimension;
+    const std::uint64_t valueCount = static_cast<std::uint64_t>(features_.size());
+    if (!writeValue(stream, kCheckpointVersion) || !writeValue(stream, dimension) ||
+        !writeValue(stream, valueCount)) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to write PatchCore checkpoint header", path.string());
+    }
+    stream.write(reinterpret_cast<const char*>(features_.data()),
+                 static_cast<std::streamsize>(features_.size() * sizeof(float)));
+    if (!stream) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to write PatchCore checkpoint", path.string());
+    }
+    return {};
+}
+
+Result<void> PatchCorePipeline::loadCheckpoint(
+    const std::filesystem::path& path) {
+    auto valid = validateConfig(config_);
+    if (!valid) return valid.status();
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        return Status::error(ErrorCode::IoError,
+                             "Unable to open PatchCore checkpoint", path.string());
+    }
+    std::array<char, 8> magic{};
+    std::uint32_t version = 0;
+    std::int32_t dimension = 0;
+    std::uint64_t valueCount = 0;
+    stream.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+    if (!stream || !readValue(stream, version) || !readValue(stream, dimension) ||
+        !readValue(stream, valueCount) || magic != kCheckpointMagic ||
+        version != kCheckpointVersion || dimension != config_.embeddingDimension ||
+        valueCount == 0 || valueCount % static_cast<std::uint64_t>(dimension) != 0 ||
+        valueCount > std::numeric_limits<std::size_t>::max()) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "PatchCore checkpoint header is incompatible", path.string());
+    }
+    std::vector<float> loaded(static_cast<std::size_t>(valueCount));
+    stream.read(reinterpret_cast<char*>(loaded.data()),
+                static_cast<std::streamsize>(loaded.size() * sizeof(float)));
+    if (!stream || stream.peek() != std::ifstream::traits_type::eof()) {
+        return Status::error(ErrorCode::ArtifactCorrupt,
+                             "PatchCore checkpoint payload is invalid", path.string());
+    }
+    for (const float value : loaded) {
+        if (!std::isfinite(value)) {
+            return Status::error(ErrorCode::ArtifactCorrupt,
+                                 "PatchCore checkpoint contains non-finite values", path.string());
+        }
+    }
+    features_ = std::move(loaded);
+    return {};
 }
 
 void PatchCorePipeline::clear() noexcept { features_.clear(); }

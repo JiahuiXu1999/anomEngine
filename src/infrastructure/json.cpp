@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 
@@ -212,6 +213,74 @@ private:
     std::size_t column_{1};
 };
 
+void appendIndent(std::ostringstream& output, int depth) {
+    output << std::string(static_cast<std::size_t>(depth) * 2, ' ');
+}
+
+void appendEscaped(std::ostringstream& output, const std::string& value) {
+    output << '"';
+    for (const unsigned char ch : value) {
+        switch (ch) {
+            case '"': output << "\\\""; break;
+            case '\\': output << "\\\\"; break;
+            case '\b': output << "\\b"; break;
+            case '\f': output << "\\f"; break;
+            case '\n': output << "\\n"; break;
+            case '\r': output << "\\r"; break;
+            case '\t': output << "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    output << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+                           << static_cast<unsigned>(ch) << std::dec << std::setfill(' ');
+                } else {
+                    output << static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+    output << '"';
+}
+
+void appendValue(std::ostringstream& output, const Value& value, bool pretty, int depth) {
+    if (value.isNull()) {
+        output << "null";
+    } else if (value.isBool()) {
+        output << (value.asBool() ? "true" : "false");
+    } else if (value.isNumber()) {
+        output << std::setprecision(std::numeric_limits<double>::max_digits10)
+               << value.asNumber();
+    } else if (value.isString()) {
+        appendEscaped(output, value.asString());
+    } else if (value.isArray()) {
+        const auto& array = value.asArray();
+        output << '[';
+        for (std::size_t index = 0; index < array.size(); ++index) {
+            if (index != 0) output << ',';
+            if (pretty) output << ' ';
+            appendValue(output, array[index], pretty, depth + 1);
+        }
+        if (pretty && !array.empty()) output << ' ';
+        output << ']';
+    } else {
+        const auto& object = value.asObject();
+        output << '{';
+        if (pretty && !object.empty()) output << '\n';
+        std::size_t index = 0;
+        for (const auto& [key, child] : object) {
+            if (index++ != 0) output << (pretty ? ",\n" : ",");
+            if (pretty) appendIndent(output, depth + 1);
+            appendEscaped(output, key);
+            output << (pretty ? ": " : ":");
+            appendValue(output, child, pretty, depth + 1);
+        }
+        if (pretty && !object.empty()) {
+            output << '\n';
+            appendIndent(output, depth);
+        }
+        output << '}';
+    }
+}
+
 }  // namespace
 
 bool Value::isNull() const noexcept { return std::holds_alternative<std::nullptr_t>(storage_); }
@@ -225,10 +294,19 @@ double Value::asNumber() const { return std::get<double>(storage_); }
 const std::string& Value::asString() const { return std::get<std::string>(storage_); }
 const Value::Array& Value::asArray() const { return std::get<Array>(storage_); }
 const Value::Object& Value::asObject() const { return std::get<Object>(storage_); }
+Value::Array& Value::asArray() { return std::get<Array>(storage_); }
+Value::Object& Value::asObject() { return std::get<Object>(storage_); }
 
 const Value* Value::find(const std::string& key) const {
     if (!isObject()) return nullptr;
     const auto& object = asObject();
+    const auto found = object.find(key);
+    return found == object.end() ? nullptr : &found->second;
+}
+
+Value* Value::find(const std::string& key) {
+    if (!isObject()) return nullptr;
+    auto& object = asObject();
     const auto found = object.find(key);
     return found == object.end() ? nullptr : &found->second;
 }
@@ -243,6 +321,13 @@ Result<Value> parse(const std::string& text) {
     } catch (const std::exception& error) {
         return Status::error(ErrorCode::InvalidManifest, error.what());
     }
+}
+
+std::string serialize(const Value& value, bool pretty) {
+    std::ostringstream output;
+    appendValue(output, value, pretty, 0);
+    if (pretty) output << '\n';
+    return output.str();
 }
 
 }  // namespace anom::model::json

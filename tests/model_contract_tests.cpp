@@ -400,6 +400,17 @@ void testTrainingPipelines(const fs::path& root) {
         faiss::read_index((patchcoreRoot / "memory.faiss").string().c_str()));
     require(index && index->d == 1 && index->ntotal == 2,
             "PatchCore pipeline wrote an invalid FAISS index");
+    require(patchcore.saveCheckpoint(patchcoreRoot / "checkpoint.bin").ok(),
+            "PatchCore pipeline could not save a checkpoint");
+    PatchCorePipeline resumedPatchcore({1, 0.5F, 1, 1'000, 42});
+    require(resumedPatchcore.loadCheckpoint(patchcoreRoot / "checkpoint.bin").ok(),
+            "PatchCore pipeline could not load a checkpoint");
+    require(resumedPatchcore.featureCount() == patchcore.featureCount(),
+            "PatchCore checkpoint lost training features");
+    PatchCorePipeline importedPatchcore({1, 1.0F, 1, 1'000, 42});
+    auto imported = importedPatchcore.loadMemoryBank(patchcoreRoot / "memory.faiss");
+    require(imported.ok() && imported.value() == 2,
+            "PatchCore pipeline could not import an existing memory bank");
 
     const fs::path padimRoot = root / "padim-training";
     fs::create_directories(padimRoot);
@@ -410,6 +421,13 @@ void testTrainingPipelines(const fs::path& root) {
     auto savedStatistics = padim.saveArtifacts(
         padimRoot / "stats.bin", padimRoot / "channels.i32");
     require(savedStatistics.ok(), savedStatistics.status().describe());
+    require(padim.saveCheckpoint(padimRoot / "checkpoint.bin").ok(),
+            "PaDiM pipeline could not save a checkpoint");
+    PadimPipeline resumedPadim({1, 1, 1, 1.0, {0}});
+    require(resumedPadim.loadCheckpoint(padimRoot / "checkpoint.bin").ok(),
+            "PaDiM pipeline could not load a checkpoint");
+    require(resumedPadim.sampleCount() == padim.sampleCount(),
+            "PaDiM checkpoint lost its sample count");
     writeText(padimRoot / "manifest.json", R"JSON({
       "schema_version":1,
       "model":{"id":"trained-padim","version":"1","algorithm":"padim"},

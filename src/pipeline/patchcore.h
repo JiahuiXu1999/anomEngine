@@ -36,7 +36,10 @@ public:
                              std::size_t vectorCount);
 
     Result<std::vector<float>> buildCoreset() const;
+    Result<std::size_t> loadMemoryBank(const std::filesystem::path& path);
     Result<std::size_t> saveMemoryBank(const std::filesystem::path& path) const;
+    Result<void> saveCheckpoint(const std::filesystem::path& path) const;
+    Result<void> loadCheckpoint(const std::filesystem::path& path);
 
     void clear() noexcept;
     [[nodiscard]] std::size_t featureCount() const noexcept;
