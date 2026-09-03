@@ -67,14 +67,24 @@ listed below, and follow each dependency's own license terms.
 
 ## Build
 
-The presets enable all algorithms, both backends, strict warnings, and tests.
-After making the required dependencies discoverable, run the preset matching
-your platform:
+The original presets enable all algorithms, both backends, strict warnings, and
+tests. Explicit `-cpu` and `-nvidia` variants are also available; CPU presets do
+not require TensorRT or CUDA, while NVIDIA presets enable TensorRT and the ONNX
+Runtime CUDA provider. After making the required dependencies discoverable, run
+the preset matching your platform and deployment:
 
 ```powershell
 cmake --preset windows-msvc-ninja-release
 cmake --build --preset windows-msvc-ninja-release
 ctest --preset windows-msvc-ninja-release
+```
+
+For example, a CPU-only Windows build uses:
+
+```powershell
+cmake --preset windows-msvc-ninja-release-cpu
+cmake --build --preset windows-msvc-ninja-release-cpu
+ctest --preset windows-msvc-ninja-release-cpu
 ```
 
 ```bash

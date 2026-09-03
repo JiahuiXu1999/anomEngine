@@ -490,7 +490,10 @@ if(BUILD_TESTING)
         add_executable(c_api_contract_tests "${ANOM_TEST_ROOT}/c_api_contract_tests.cpp")
         target_include_directories(c_api_contract_tests PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}")
         target_link_libraries(c_api_contract_tests PRIVATE anom::engine)
-        target_compile_definitions(c_api_contract_tests PRIVATE ANOM_TEST_DATA_DIR="${ANOM_TEST_ROOT}/data")
+        target_compile_definitions(c_api_contract_tests PRIVATE
+            ANOM_TEST_DATA_DIR="${ANOM_TEST_ROOT}/data"
+            ANOM_TEST_TENSORRT_ENABLED=$<BOOL:${ANOM_ENABLE_TENSORRT}>
+            ANOM_TEST_ORT_CUDA_ENABLED=$<BOOL:${ANOM_ORT_ENABLE_CUDA}>)
         add_dependencies(c_api_contract_tests anom_backend_onnxruntime anom_algo_direct)
         if(ANOM_BUILD_ALGO_PATCHCORE)
             add_dependencies(c_api_contract_tests anom_algo_patchcore)

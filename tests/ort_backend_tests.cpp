@@ -83,7 +83,7 @@ void testIdentityModel() {
     auto cpuOnlyBackend = createRuntimeBackend(RuntimeBackend::OnnxRuntime);
     require(cpuOnlyBackend.ok(), cpuOnlyBackend.status().describe());
     auto cudaRejected = cpuOnlyBackend.value()->load(cudaConfig);
-    require(!cudaRejected && cudaRejected.status().code == ErrorCode::BackendFailure,
+    require(!cudaRejected && cudaRejected.status().code == ErrorCode::DeviceUnavailable,
             "CPU-only ORT build did not reject CUDAExecutionProvider");
 }
 

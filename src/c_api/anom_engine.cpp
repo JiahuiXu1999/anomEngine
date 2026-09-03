@@ -20,10 +20,14 @@
 #endif
 
 using anom::model::ErrorCode;
+using anom::model::DevicePreference;
+using anom::model::FallbackPolicy;
 using anom::model::InferenceSession;
 using anom::model::LoadOptions;
 using anom::model::pathFromUtf8;
+using anom::model::PrecisionPreference;
 using anom::model::Prediction;
+using anom::model::RuntimeBackend;
 using anom::model::Status;
 
 thread_local std::string anomLastError;
@@ -59,6 +63,9 @@ anom_status_t publicStatus(ErrorCode code) noexcept {
         case ErrorCode::TensorTypeMismatch:
         case ErrorCode::EngineIncompatible: return ANOM_STATUS_INVALID_MODEL_PACKAGE;
         case ErrorCode::UnsupportedAlgorithm: return ANOM_STATUS_PLUGIN_NOT_FOUND;
+        case ErrorCode::PluginNotFound: return ANOM_STATUS_PLUGIN_NOT_FOUND;
+        case ErrorCode::PluginAbiMismatch: return ANOM_STATUS_PLUGIN_ABI_MISMATCH;
+        case ErrorCode::DeviceUnavailable: return ANOM_STATUS_UNSUPPORTED;
         case ErrorCode::OutOfMemory: return ANOM_STATUS_OUT_OF_MEMORY;
         case ErrorCode::BackendFailure:
         case ErrorCode::AdapterFailure:
@@ -195,6 +202,76 @@ anom_status_t exportPrediction(Prediction source, anom_prediction_t* destination
     }
 }
 
+anom_status_t createSession(const char* modelPackage, LoadOptions options,
+                            anom_session_t** outSession) {
+    if (!outSession) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session create arguments are null");
+    }
+    *outSession = nullptr;
+    if (!modelPackage) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session create arguments are null");
+    }
+    try {
+        auto loaded = InferenceSession::load(pathFromUtf8(modelPackage), options);
+        if (!loaded) return fail(loaded.status());
+        auto session = std::make_unique<anom_session>();
+        session->implementation = std::move(loaded.value());
+        *outSession = session.release();
+        return ANOM_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while creating session");
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INTERNAL_ERROR, error.what());
+    }
+}
+
+anom_status_t parseBackend(const char* value, std::optional<RuntimeBackend>& destination) {
+    if (!value || !*value) return ANOM_STATUS_OK;
+    if (std::strcmp(value, "tensorrt") == 0) {
+        destination = RuntimeBackend::TensorRT;
+        return ANOM_STATUS_OK;
+    }
+    if (std::strcmp(value, "onnxruntime") == 0 || std::strcmp(value, "ort") == 0) {
+        destination = RuntimeBackend::OnnxRuntime;
+        return ANOM_STATUS_OK;
+    }
+    return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                "backend_utf8 must be 'tensorrt' or 'onnxruntime'");
+}
+
+anom_status_t setPluginDirectory(const char* value, LoadOptions& destination) {
+    if (!value || !*value) return ANOM_STATUS_OK;
+    try {
+        destination.pluginDirectory = pathFromUtf8(value);
+        return ANOM_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY,
+                    "Out of memory while reading the plugin directory");
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, error.what());
+    }
+}
+
+anom_device_preference_t publicDevice(DevicePreference value) noexcept {
+    switch (value) {
+        case DevicePreference::Cpu: return ANOM_DEVICE_CPU;
+        case DevicePreference::Gpu: return ANOM_DEVICE_GPU;
+        case DevicePreference::Manifest:
+        case DevicePreference::Auto: return ANOM_DEVICE_AUTO;
+    }
+    return ANOM_DEVICE_AUTO;
+}
+
+anom_precision_t publicPrecision(PrecisionPreference value) noexcept {
+    switch (value) {
+        case PrecisionPreference::Float32: return ANOM_PRECISION_FP32;
+        case PrecisionPreference::Float16: return ANOM_PRECISION_FP16;
+        case PrecisionPreference::Manifest:
+        case PrecisionPreference::Auto: return ANOM_PRECISION_AUTO;
+    }
+    return ANOM_PRECISION_AUTO;
+}
+
 }  // namespace
 
 extern "C" ANOM_ENGINE_API uint32_t anom_get_abi_version(void) {
@@ -209,36 +286,75 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_create(
     const char* modelPackage, const anom_session_options_t* options,
     anom_session_t** outSession) {
     anomLastError.clear();
-    if (!outSession) {
-        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session create arguments are null");
-    }
-    *outSession = nullptr;
-    if (!modelPackage) {
-        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session create arguments are null");
-    }
+    if (outSession) *outSession = nullptr;
     if (options && options->struct_size < sizeof(anom_session_options_t)) {
         return fail(ANOM_STATUS_INVALID_ARGUMENT,
                     "Session options struct_size is incompatible");
     }
-    try {
-        LoadOptions converted;
-        if (options) {
-            converted.warmup = options->warmup != 0;
-            if (options->plugin_directory_utf8 && *options->plugin_directory_utf8) {
-                converted.pluginDirectory = pathFromUtf8(options->plugin_directory_utf8);
-            }
-        }
-        auto loaded = InferenceSession::load(pathFromUtf8(modelPackage), converted);
-        if (!loaded) return fail(loaded.status());
-        auto session = std::make_unique<anom_session>();
-        session->implementation = std::move(loaded.value());
-        *outSession = session.release();
-        return ANOM_STATUS_OK;
-    } catch (const std::bad_alloc&) {
-        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while creating session");
-    } catch (const std::exception& error) {
-        return fail(ANOM_STATUS_INTERNAL_ERROR, error.what());
+    LoadOptions converted;
+    if (options) {
+        converted.warmup = options->warmup != 0;
+        const anom_status_t directoryStatus =
+            setPluginDirectory(options->plugin_directory_utf8, converted);
+        if (directoryStatus != ANOM_STATUS_OK) return directoryStatus;
     }
+    return createSession(modelPackage, std::move(converted), outSession);
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_session_create_v2(
+    const char* modelPackage, const anom_session_options_v2_t* options,
+    anom_session_t** outSession) {
+    anomLastError.clear();
+    if (outSession) *outSession = nullptr;
+    constexpr std::size_t minimumSize = offsetof(anom_session_options_v2_t, reserved);
+    if (options && options->struct_size < minimumSize) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    "Session v2 options struct_size is incompatible");
+    }
+
+    LoadOptions converted;
+    converted.devicePreference = DevicePreference::Auto;
+    converted.deviceId = 0;
+    if (options) {
+        switch (options->device) {
+            case ANOM_DEVICE_AUTO: converted.devicePreference = DevicePreference::Auto; break;
+            case ANOM_DEVICE_CPU: converted.devicePreference = DevicePreference::Cpu; break;
+            case ANOM_DEVICE_GPU: converted.devicePreference = DevicePreference::Gpu; break;
+            default:
+                return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                            "Session device preference is invalid");
+        }
+        switch (options->fallback) {
+            case ANOM_FALLBACK_NONE: converted.fallbackPolicy = FallbackPolicy::None; break;
+            case ANOM_FALLBACK_LOAD_ONLY:
+                converted.fallbackPolicy = FallbackPolicy::LoadOnly;
+                break;
+            default:
+                return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                            "Session fallback policy is invalid");
+        }
+        switch (options->precision) {
+            case ANOM_PRECISION_AUTO: converted.precision = PrecisionPreference::Auto; break;
+            case ANOM_PRECISION_FP32: converted.precision = PrecisionPreference::Float32; break;
+            case ANOM_PRECISION_FP16: converted.precision = PrecisionPreference::Float16; break;
+            default:
+                return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                            "Session precision preference is invalid");
+        }
+        if (options->device_id < -1) {
+            return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                        "Session device_id must be -1 or non-negative");
+        }
+        converted.deviceId = options->device_id < 0 ? 0 : options->device_id;
+        const anom_status_t backendStatus = parseBackend(options->backend_utf8,
+                                                         converted.backend);
+        if (backendStatus != ANOM_STATUS_OK) return backendStatus;
+        converted.warmup = options->warmup != 0;
+        const anom_status_t directoryStatus =
+            setPluginDirectory(options->plugin_directory_utf8, converted);
+        if (directoryStatus != ANOM_STATUS_OK) return directoryStatus;
+    }
+    return createSession(modelPackage, std::move(converted), outSession);
 }
 
 extern "C" ANOM_ENGINE_API void anom_session_destroy(anom_session_t* session) {
@@ -271,6 +387,28 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_model_info(
     outInfo->algorithm_utf8 = anom::model::toString(info.algorithm);
     outInfo->backend_utf8 = anom::model::toString(info.runtimeBackend);
     outInfo->execution_provider_utf8 = info.executionProvider.c_str();
+    return ANOM_STATUS_OK;
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_execution_info(
+    const anom_session_t* session, anom_execution_info_t* outInfo) {
+    anomLastError.clear();
+    constexpr std::size_t minimumSize = offsetof(anom_execution_info_t, reserved);
+    if (!session || !outInfo || outInfo->struct_size < minimumSize) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT, "Execution info arguments are invalid");
+    }
+    const uint32_t structSize = outInfo->struct_size;
+    std::memset(outInfo, 0, std::min<std::size_t>(structSize, sizeof(*outInfo)));
+    outInfo->struct_size = structSize;
+    const auto& info = session->implementation->executionInfo();
+    outInfo->requested_device = publicDevice(info.requestedDevice);
+    outInfo->backend_utf8 = anom::model::toString(info.runtimeBackend);
+    outInfo->execution_provider_utf8 = anom::model::toString(info.executionProvider);
+    outInfo->device_id = info.deviceId;
+    outInfo->device_name_utf8 = info.deviceName.c_str();
+    outInfo->precision = publicPrecision(info.precision);
+    outInfo->fallback_occurred = info.fallbackOccurred ? 1 : 0;
+    outInfo->fallback_reason_utf8 = info.fallbackReason.c_str();
     return ANOM_STATUS_OK;
 }
 

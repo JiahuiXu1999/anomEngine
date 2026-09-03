@@ -25,6 +25,9 @@ enum class RuntimeBackend { TensorRT, OnnxRuntime };
 enum class OrtExecutionProvider { Cpu, Cuda };
 enum class OrtGraphOptimization { Disabled, Basic, Extended, All };
 enum class OrtExecutionMode { Sequential, Parallel };
+enum class DevicePreference { Manifest, Auto, Cpu, Gpu };
+enum class FallbackPolicy { None, LoadOnly };
+enum class PrecisionPreference { Manifest, Auto, Float32, Float16 };
 
 struct TensorShape {
     std::vector<std::int64_t> dims;
@@ -164,6 +167,17 @@ struct ModelInfo {
     RuntimeBackend runtimeBackend{RuntimeBackend::TensorRT};
     std::string executionProvider{"cuda"};
     TensorSignature signature;
+};
+
+struct ExecutionInfo {
+    DevicePreference requestedDevice{DevicePreference::Manifest};
+    RuntimeBackend runtimeBackend{RuntimeBackend::TensorRT};
+    OrtExecutionProvider executionProvider{OrtExecutionProvider::Cuda};
+    int deviceId{0};
+    std::string deviceName;
+    PrecisionPreference precision{PrecisionPreference::Auto};
+    bool fallbackOccurred{false};
+    std::string fallbackReason;
 };
 
 [[nodiscard]] std::size_t dataTypeSize(DataType type);

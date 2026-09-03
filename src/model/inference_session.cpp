@@ -9,6 +9,9 @@
 #include <algorithm>
 #include <chrono>
 #include <new>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace anom::model {
 namespace {
@@ -60,6 +63,100 @@ Result<void> validateInputSignature(const ModelManifest& manifest,
     return {};
 }
 
+struct RuntimeCandidate {
+    RuntimeBackend backend{RuntimeBackend::OnnxRuntime};
+    OrtExecutionProvider provider{OrtExecutionProvider::Cpu};
+};
+
+const char* candidateName(const RuntimeCandidate& candidate) noexcept {
+    if (candidate.backend == RuntimeBackend::TensorRT) return "tensorrt/cuda";
+    return candidate.provider == OrtExecutionProvider::Cuda
+        ? "onnxruntime/cuda" : "onnxruntime/cpu";
+}
+
+bool retryableRuntimeFailure(ErrorCode code) noexcept {
+    switch (code) {
+        case ErrorCode::ArtifactMissing:
+        case ErrorCode::EngineIncompatible:
+        case ErrorCode::BackendFailure:
+        case ErrorCode::CudaFailure:
+        case ErrorCode::PluginNotFound:
+        case ErrorCode::PluginAbiMismatch:
+        case ErrorCode::DeviceUnavailable:
+            return true;
+        default:
+            return false;
+    }
+}
+
+std::string joinAttempts(const std::vector<std::string>& attempts) {
+    std::ostringstream stream;
+    for (std::size_t i = 0; i < attempts.size(); ++i) {
+        if (i) stream << " | ";
+        stream << attempts[i];
+    }
+    return stream.str();
+}
+
+Result<std::vector<RuntimeCandidate>> runtimeCandidates(
+    const BackendConfig& config, const LoadOptions& options) {
+    std::vector<RuntimeCandidate> result;
+    const auto add = [&](RuntimeBackend backend, OrtExecutionProvider provider) {
+        if (options.precision == PrecisionPreference::Float16 &&
+            backend != RuntimeBackend::TensorRT) return;
+        if (backend == RuntimeBackend::TensorRT &&
+            config.enginePath.empty() && config.onnxPath.empty()) return;
+        if (backend == RuntimeBackend::OnnxRuntime && config.onnxPath.empty()) return;
+        for (const auto& candidate : result) {
+            if (candidate.backend == backend && candidate.provider == provider) return;
+        }
+        result.push_back({backend, provider});
+    };
+
+    const auto constrainedBackend = options.backend;
+    switch (options.devicePreference) {
+        case DevicePreference::Manifest: {
+            const RuntimeBackend backend = constrainedBackend.value_or(config.backend);
+            const OrtExecutionProvider provider =
+                options.ortProvider.value_or(config.ortProvider);
+            add(backend, provider);
+            break;
+        }
+        case DevicePreference::Cpu:
+            if (constrainedBackend && *constrainedBackend == RuntimeBackend::TensorRT) {
+                return Status::error(ErrorCode::InvalidArgument,
+                                     "TensorRT cannot satisfy a CPU execution request");
+            }
+            add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cpu);
+            break;
+        case DevicePreference::Gpu:
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
+                add(RuntimeBackend::TensorRT, OrtExecutionProvider::Cuda);
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)
+                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cuda);
+            if (options.fallbackPolicy == FallbackPolicy::LoadOnly &&
+                (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)) {
+                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cpu);
+            }
+            break;
+        case DevicePreference::Auto:
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
+                add(RuntimeBackend::TensorRT, OrtExecutionProvider::Cuda);
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime) {
+                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cuda);
+                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cpu);
+            }
+            break;
+    }
+
+    if (result.empty()) {
+        return Status::error(
+            ErrorCode::DeviceUnavailable,
+            "The model package has no artifact compatible with the requested execution device");
+    }
+    return result;
+}
+
 }  // namespace
 
 InferenceSession::InferenceSession(ModelPackage package,
@@ -88,14 +185,13 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
     auto package = ModelPackage::load(modelPackage);
     if (!package) return package.status();
 
-    auto adapter = createAdapter(package.value(), options.pluginDirectory);
-    if (!adapter) return adapter.status();
-
     const auto& manifest = package.value().manifest();
     BackendConfig backendConfig;
     backendConfig.backend = options.backend.value_or(manifest.runtime.backend);
     backendConfig.loadPolicy = options.engineLoadPolicy.value_or(manifest.runtime.loadPolicy);
     backendConfig.fp16 = options.fp16.value_or(manifest.runtime.fp16);
+    if (options.precision == PrecisionPreference::Float32) backendConfig.fp16 = false;
+    if (options.precision == PrecisionPreference::Float16) backendConfig.fp16 = true;
     backendConfig.maxBatchSize = manifest.runtime.maxBatchSize;
     backendConfig.workspaceBytes = manifest.runtime.workspaceBytes;
     backendConfig.inputName = manifest.input.tensorName;
@@ -108,7 +204,7 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
     backendConfig.ortGraphOptimization = manifest.runtime.ortGraphOptimization;
     backendConfig.ortExecutionMode = manifest.runtime.ortExecutionMode;
     backendConfig.ortStrictProvider = manifest.runtime.ortStrictProvider;
-    backendConfig.deviceId = manifest.runtime.deviceId;
+    backendConfig.deviceId = options.deviceId.value_or(manifest.runtime.deviceId);
     backendConfig.intraOpThreads = manifest.runtime.intraOpThreads;
     backendConfig.interOpThreads = manifest.runtime.interOpThreads;
     backendConfig.enableMemoryPattern = manifest.runtime.enableMemoryPattern;
@@ -128,28 +224,79 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
         backendConfig.enginePath = path.value();
     }
 
-    auto backend = createRuntimeBackend(backendConfig.backend, options.pluginDirectory);
-    if (!backend) return backend.status();
-    auto loaded = backend.value()->load(backendConfig);
-    if (!loaded) return loaded.status();
-    auto inputValid = validateInputSignature(manifest, backend.value()->signature());
-    if (!inputValid) return inputValid.status();
-    auto adapterValid = adapter.value()->validateSignature(backend.value()->signature());
-    if (!adapterValid) return adapterValid.status();
+    auto candidates = runtimeCandidates(backendConfig, options);
+    if (!candidates) return candidates.status();
 
-    auto session = std::unique_ptr<InferenceSession>(
-        new InferenceSession(std::move(package.value()), std::move(backend.value()),
-                             std::move(adapter.value())));
-    session->modelInfo_.runtimeBackend = backendConfig.backend;
-    session->modelInfo_.executionProvider =
-        backendConfig.backend == RuntimeBackend::TensorRT
-            ? "cuda"
-            : toString(backendConfig.ortProvider);
-    if (options.warmup) {
-        auto warmed = session->warmup();
-        if (!warmed) return warmed.status();
+    std::vector<std::string> attempts;
+    Status lastFailure = Status::error(ErrorCode::DeviceUnavailable,
+                                       "No runtime candidate was attempted");
+    for (const auto& candidate : candidates.value()) {
+        BackendConfig selectedConfig = backendConfig;
+        selectedConfig.backend = candidate.backend;
+        selectedConfig.ortProvider = candidate.provider;
+        if (candidate.provider == OrtExecutionProvider::Cuda)
+            selectedConfig.ortStrictProvider = true;
+
+        auto backend = createRuntimeBackend(candidate.backend, options.pluginDirectory);
+        if (!backend) {
+            lastFailure = backend.status();
+            attempts.push_back(std::string(candidateName(candidate)) + ": " +
+                               lastFailure.describe());
+            if (!retryableRuntimeFailure(lastFailure.code)) return lastFailure;
+            continue;
+        }
+        auto loaded = backend.value()->load(selectedConfig);
+        if (!loaded) {
+            lastFailure = loaded.status();
+            attempts.push_back(std::string(candidateName(candidate)) + ": " +
+                               lastFailure.describe());
+            if (!retryableRuntimeFailure(lastFailure.code)) return lastFailure;
+            continue;
+        }
+
+        auto inputValid = validateInputSignature(manifest, backend.value()->signature());
+        if (!inputValid) return inputValid.status();
+        auto adapter = createAdapter(package.value(), options.pluginDirectory);
+        if (!adapter) return adapter.status();
+        auto adapterValid = adapter.value()->validateSignature(backend.value()->signature());
+        if (!adapterValid) return adapterValid.status();
+
+        auto session = std::unique_ptr<InferenceSession>(
+            new InferenceSession(package.value(), std::move(backend.value()),
+                                 std::move(adapter.value())));
+        session->modelInfo_.runtimeBackend = candidate.backend;
+        session->modelInfo_.executionProvider = candidate.backend == RuntimeBackend::TensorRT
+            ? "cuda" : toString(candidate.provider);
+        session->executionInfo_.requestedDevice = options.devicePreference;
+        session->executionInfo_.runtimeBackend = candidate.backend;
+        session->executionInfo_.executionProvider = candidate.backend == RuntimeBackend::TensorRT
+            ? OrtExecutionProvider::Cuda : candidate.provider;
+        session->executionInfo_.deviceId = candidate.provider == OrtExecutionProvider::Cpu
+            ? -1 : selectedConfig.deviceId;
+        session->executionInfo_.deviceName = candidate.provider == OrtExecutionProvider::Cpu
+            ? "CPU" : "CUDA device " + std::to_string(selectedConfig.deviceId);
+        session->executionInfo_.precision =
+            candidate.backend == RuntimeBackend::TensorRT && selectedConfig.fp16
+                ? PrecisionPreference::Float16 : PrecisionPreference::Float32;
+        session->executionInfo_.fallbackOccurred = !attempts.empty();
+        session->executionInfo_.fallbackReason = joinAttempts(attempts);
+
+        if (options.warmup) {
+            auto warmed = session->warmup();
+            if (!warmed) {
+                lastFailure = warmed.status();
+                attempts.push_back(std::string(candidateName(candidate)) + " warmup: " +
+                                   lastFailure.describe());
+                if (!retryableRuntimeFailure(lastFailure.code)) return lastFailure;
+                continue;
+            }
+        }
+        return session;
     }
-    return session;
+
+    return Status::error(lastFailure.code,
+                         "No compatible runtime candidate could be initialized",
+                         joinAttempts(attempts));
     } catch (const std::bad_alloc&) {
         return Status::error(ErrorCode::OutOfMemory, "Out of memory while loading inference session",
                              modelPackage.string());

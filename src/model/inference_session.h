@@ -19,6 +19,10 @@ struct LoadOptions {
     std::optional<OrtExecutionProvider> ortProvider;
     std::optional<EngineLoadPolicy> engineLoadPolicy;
     std::optional<bool> fp16;
+    std::optional<int> deviceId;
+    DevicePreference devicePreference{DevicePreference::Manifest};
+    FallbackPolicy fallbackPolicy{FallbackPolicy::None};
+    PrecisionPreference precision{PrecisionPreference::Manifest};
     std::filesystem::path pluginDirectory;
     bool warmup{false};
 };
@@ -38,6 +42,7 @@ public:
     Result<void> warmup();
 
     [[nodiscard]] const ModelInfo& modelInfo() const noexcept { return modelInfo_; }
+    [[nodiscard]] const ExecutionInfo& executionInfo() const noexcept { return executionInfo_; }
 
 private:
     InferenceSession(ModelPackage package,
@@ -52,6 +57,7 @@ private:
     std::unique_ptr<ImagePreprocessor> preprocessor_;
     std::unique_ptr<AnomalyPostprocessor> postprocessor_;
     ModelInfo modelInfo_;
+    ExecutionInfo executionInfo_;
 };
 
 }  // namespace anom::model

@@ -63,6 +63,37 @@ if (anom_session_predict(session, &image, &prediction) == ANOM_STATUS_OK) {
 anom_session_destroy(session);
 ```
 
+### CPU/GPU selection
+
+`anom_session_create` preserves the v1 behavior and uses the runtime declared by the manifest. New applications
+can use `anom_session_create_v2` to express a device preference without depending on backend-specific APIs:
+
+```c
+anom_session_options_v2_t options = {0};
+options.struct_size = sizeof(options);
+options.device = ANOM_DEVICE_GPU;
+options.device_id = -1;
+options.fallback = ANOM_FALLBACK_LOAD_ONLY;
+options.precision = ANOM_PRECISION_AUTO;
+
+anom_session_t* session = NULL;
+if (anom_session_create_v2(model_path, &options, &session) != ANOM_STATUS_OK) {
+    return 1;
+}
+
+anom_execution_info_t execution = {0};
+execution.struct_size = sizeof(execution);
+anom_session_get_execution_info(session, &execution);
+/* execution.backend_utf8, execution.execution_provider_utf8 and
+   execution.fallback_reason_utf8 describe the actual runtime. */
+```
+
+`ANOM_DEVICE_CPU` selects ONNX Runtime CPU. `ANOM_DEVICE_GPU` tries TensorRT and then ONNX Runtime CUDA;
+`ANOM_FALLBACK_LOAD_ONLY` additionally permits ONNX Runtime CPU when GPU initialization fails. `ANOM_DEVICE_AUTO`
+tries TensorRT/CUDA, ONNX Runtime/CUDA, and ONNX Runtime/CPU in that order. A non-empty `backend_utf8` constrains
+selection to `tensorrt` or `onnxruntime`. Fallback only occurs while creating or warming the session; prediction
+failures are never silently retried on a different device.
+
 The package root must contain `manifest.json`. All artifact paths are relative to this root and are rejected if
 they are absolute or escape through `..`. An optional `checksums` object maps artifact paths to lowercase SHA-256
 digests; every listed artifact is verified before any model or index is loaded. Generated engine caches normally

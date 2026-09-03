@@ -111,6 +111,25 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         reset();
         config_ = config;
+        int deviceCount = 0;
+        const auto countStatus = cudaGetDeviceCount(&deviceCount);
+        if (countStatus != cudaSuccess || deviceCount <= 0) {
+            return failure(ErrorCode::DeviceUnavailable,
+                           "No usable CUDA device is available for TensorRT",
+                           cudaGetErrorString(countStatus));
+        }
+        if (config.deviceId < 0 || config.deviceId >= deviceCount) {
+            return failure(ErrorCode::DeviceUnavailable,
+                           "Requested CUDA device is unavailable",
+                           std::to_string(config.deviceId) + " requested, " +
+                               std::to_string(deviceCount) + " available");
+        }
+        const auto deviceStatus = cudaSetDevice(config.deviceId);
+        if (deviceStatus != cudaSuccess) {
+            return failure(ErrorCode::DeviceUnavailable,
+                           "Unable to select the requested CUDA device",
+                           cudaGetErrorString(deviceStatus));
+        }
         runtime_ = nvinfer1::createInferRuntime(logger_);
         if (!runtime_) return failure(ErrorCode::BackendFailure, "Unable to create TensorRT runtime");
 

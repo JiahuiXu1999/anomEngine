@@ -15,7 +15,7 @@ namespace {
 
 ErrorCode pluginErrorCode(int32_t value) noexcept {
     if (value >= static_cast<int32_t>(ErrorCode::InvalidArgument) &&
-        value <= static_cast<int32_t>(ErrorCode::InternalError)) {
+        value <= static_cast<int32_t>(ErrorCode::DeviceUnavailable)) {
         return static_cast<ErrorCode>(value);
     }
     return ErrorCode::BackendFailure;
@@ -217,13 +217,13 @@ Result<std::unique_ptr<IRuntimeBackend>> createRuntimeBackend(
     const auto path = plugins::pluginPath(directory, "backend", name);
     auto library = plugins::DynamicLibrary::open(path);
     if (!library) {
-        return Status::error(ErrorCode::BackendFailure, "Required backend plugin is unavailable",
+        return Status::error(ErrorCode::PluginNotFound, "Required backend plugin is unavailable",
                              library.status().describe());
     }
     auto query = reinterpret_cast<anom_backend_plugin_query_v1_fn>(
         library.value()->symbol("anom_backend_plugin_query_v1"));
     if (!query) {
-        return Status::error(ErrorCode::BackendFailure,
+        return Status::error(ErrorCode::PluginAbiMismatch,
                              "Backend plugin entry point is missing", pathToUtf8(path));
     }
     anom_backend_plugin_api_v1 api{};
@@ -234,7 +234,7 @@ Result<std::unique_ptr<IRuntimeBackend>> createRuntimeBackend(
         std::strcmp(api.backend_name_utf8, name) != 0 || !api.create || !api.destroy ||
         !api.get_signature || !api.get_max_batch_size || !api.infer ||
         !api.release_batch || !api.get_last_error) {
-        return Status::error(ErrorCode::BackendFailure,
+        return Status::error(ErrorCode::PluginAbiMismatch,
                              "Backend plugin ABI or function table is invalid", pathToUtf8(path));
     }
     return std::unique_ptr<IRuntimeBackend>(

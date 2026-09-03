@@ -200,6 +200,9 @@ anom_status_t publicStatus(ErrorCode code) noexcept {
         case ErrorCode::TensorTypeMismatch:
         case ErrorCode::EngineIncompatible: return ANOM_STATUS_INVALID_MODEL_PACKAGE;
         case ErrorCode::UnsupportedAlgorithm: return ANOM_STATUS_UNSUPPORTED;
+        case ErrorCode::PluginNotFound: return ANOM_STATUS_PLUGIN_NOT_FOUND;
+        case ErrorCode::PluginAbiMismatch: return ANOM_STATUS_PLUGIN_ABI_MISMATCH;
+        case ErrorCode::DeviceUnavailable: return ANOM_STATUS_UNSUPPORTED;
         case ErrorCode::OutOfMemory: return ANOM_STATUS_OUT_OF_MEMORY;
         case ErrorCode::BackendFailure:
         case ErrorCode::AdapterFailure:

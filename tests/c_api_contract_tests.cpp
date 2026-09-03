@@ -77,6 +77,93 @@ void testPublicCAbi() {
     anom_session_destroy(session);
 }
 
+void testExecutionSelectionCAbi() {
+    const std::filesystem::path package =
+        std::filesystem::path(ANOM_TEST_DATA_DIR) / "direct_ort_package";
+    const std::string packageUtf8 = anom::model::pathToUtf8(package);
+
+    anom_session_options_v2_t options{};
+    options.struct_size = sizeof(options);
+    options.device = ANOM_DEVICE_CPU;
+    options.device_id = -1;
+    options.fallback = ANOM_FALLBACK_NONE;
+    options.precision = ANOM_PRECISION_FP32;
+
+    anom_session_t* session = nullptr;
+    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+                ANOM_STATUS_OK,
+            "CPU session v2 creation failed: " + lastError());
+    require(session != nullptr, "CPU session v2 returned null");
+
+    anom_execution_info_t execution{};
+    execution.struct_size = sizeof(execution);
+    require(anom_session_get_execution_info(session, &execution) == ANOM_STATUS_OK,
+            "Execution info query failed: " + lastError());
+    require(execution.requested_device == ANOM_DEVICE_CPU,
+            "Execution info lost the requested CPU device");
+    require(std::string(execution.backend_utf8) == "onnxruntime",
+            "CPU request did not select ONNX Runtime");
+    require(std::string(execution.execution_provider_utf8) == "cpu",
+            "CPU request did not select the CPU provider");
+    require(execution.device_id == -1 && execution.fallback_occurred == 0,
+            "CPU execution info is inconsistent");
+    require(execution.precision == ANOM_PRECISION_FP32,
+            "CPU execution precision is wrong");
+    anom_session_destroy(session);
+
+    options.backend_utf8 = "tensorrt";
+    session = reinterpret_cast<anom_session_t*>(1);
+    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+                ANOM_STATUS_INVALID_ARGUMENT,
+            "CPU request unexpectedly accepted TensorRT");
+    require(session == nullptr, "Rejected v2 create did not clear its output");
+
+#if !ANOM_TEST_ORT_CUDA_ENABLED
+    options.backend_utf8 = "onnxruntime";
+    options.device = ANOM_DEVICE_GPU;
+    options.fallback = ANOM_FALLBACK_LOAD_ONLY;
+    options.precision = ANOM_PRECISION_AUTO;
+    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+                ANOM_STATUS_OK,
+            "GPU-preferred session did not fall back to CPU: " + lastError());
+    execution = {};
+    execution.struct_size = sizeof(execution);
+    require(anom_session_get_execution_info(session, &execution) == ANOM_STATUS_OK,
+            "Fallback execution info query failed: " + lastError());
+    require(std::string(execution.execution_provider_utf8) == "cpu" &&
+                execution.fallback_occurred == 1,
+            "GPU-preferred session did not report CPU fallback");
+    require(execution.fallback_reason_utf8 && *execution.fallback_reason_utf8,
+            "GPU-preferred session did not report a fallback reason");
+    anom_session_destroy(session);
+
+    options.fallback = ANOM_FALLBACK_NONE;
+    session = reinterpret_cast<anom_session_t*>(1);
+    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+                ANOM_STATUS_UNSUPPORTED,
+            "Strict GPU request unexpectedly succeeded on a CPU-only ORT build");
+    require(session == nullptr, "Rejected strict GPU create did not clear its output");
+#endif
+
+#if !ANOM_TEST_TENSORRT_ENABLED && !ANOM_TEST_ORT_CUDA_ENABLED
+    options.backend_utf8 = nullptr;
+    options.device = ANOM_DEVICE_AUTO;
+    options.fallback = ANOM_FALLBACK_NONE;
+    session = nullptr;
+    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+                ANOM_STATUS_OK,
+            "AUTO session did not select the available CPU runtime: " + lastError());
+    execution = {};
+    execution.struct_size = sizeof(execution);
+    require(anom_session_get_execution_info(session, &execution) == ANOM_STATUS_OK,
+            "AUTO execution info query failed: " + lastError());
+    require(std::string(execution.execution_provider_utf8) == "cpu" &&
+                execution.fallback_occurred == 1,
+            "AUTO session did not report its CPU fallback");
+    anom_session_destroy(session);
+#endif
+}
+
 void testModelManagementCAbi() {
     const std::filesystem::path package =
         std::filesystem::path(ANOM_TEST_DATA_DIR) / "direct_ort_package";
@@ -292,6 +379,7 @@ void testInvalidArguments() {
 int main() {
     try {
         testPublicCAbi();
+        testExecutionSelectionCAbi();
         testModelManagementCAbi();
         testPatchCoreFitterCAbi();
         testInvalidArguments();

@@ -76,6 +76,43 @@ typedef struct anom_session_options {
     uint32_t reserved[8];
 } anom_session_options_t;
 
+typedef int32_t anom_device_preference_t;
+enum {
+    ANOM_DEVICE_AUTO = 0,
+    ANOM_DEVICE_CPU = 1,
+    ANOM_DEVICE_GPU = 2
+};
+
+typedef int32_t anom_fallback_policy_t;
+enum {
+    ANOM_FALLBACK_NONE = 0,
+    ANOM_FALLBACK_LOAD_ONLY = 1
+};
+
+typedef int32_t anom_precision_t;
+enum {
+    ANOM_PRECISION_AUTO = 0,
+    ANOM_PRECISION_FP32 = 1,
+    ANOM_PRECISION_FP16 = 2
+};
+
+/*
+ * Session options with explicit execution-device selection. AUTO tries
+ * TensorRT/CUDA, ONNX Runtime/CUDA, then ONNX Runtime/CPU. A non-empty
+ * backend_utf8 constrains selection to "tensorrt" or "onnxruntime".
+ */
+typedef struct anom_session_options_v2 {
+    uint32_t struct_size;
+    const char* plugin_directory_utf8;
+    int32_t warmup;
+    anom_device_preference_t device;
+    int32_t device_id; /* -1 selects the runtime default device. */
+    anom_fallback_policy_t fallback;
+    anom_precision_t precision;
+    const char* backend_utf8;
+    uint32_t reserved[8];
+} anom_session_options_v2_t;
+
 typedef struct anom_image {
     uint32_t struct_size;
     const uint8_t* data;
@@ -146,6 +183,19 @@ typedef struct anom_model_info {
     const char* execution_provider_utf8;
     uint32_t reserved[8];
 } anom_model_info_t;
+
+typedef struct anom_execution_info {
+    uint32_t struct_size;
+    anom_device_preference_t requested_device;
+    const char* backend_utf8;
+    const char* execution_provider_utf8;
+    int32_t device_id;
+    const char* device_name_utf8;
+    anom_precision_t precision;
+    int32_t fallback_occurred;
+    const char* fallback_reason_utf8;
+    uint32_t reserved[8];
+} anom_execution_info_t;
 
 typedef struct anom_model_validate_options {
     uint32_t struct_size;
@@ -328,6 +378,11 @@ ANOM_ENGINE_API anom_status_t anom_session_create(
     const anom_session_options_t* options,
     anom_session_t** out_session);
 
+ANOM_ENGINE_API anom_status_t anom_session_create_v2(
+    const char* model_package_utf8,
+    const anom_session_options_v2_t* options,
+    anom_session_t** out_session);
+
 ANOM_ENGINE_API void anom_session_destroy(anom_session_t* session);
 
 ANOM_ENGINE_API anom_status_t anom_session_warmup(anom_session_t* session);
@@ -335,6 +390,10 @@ ANOM_ENGINE_API anom_status_t anom_session_warmup(anom_session_t* session);
 ANOM_ENGINE_API anom_status_t anom_session_get_model_info(
     const anom_session_t* session,
     anom_model_info_t* out_info);
+
+ANOM_ENGINE_API anom_status_t anom_session_get_execution_info(
+    const anom_session_t* session,
+    anom_execution_info_t* out_info);
 
 ANOM_ENGINE_API anom_status_t anom_session_predict(
     anom_session_t* session,

@@ -117,6 +117,46 @@
                 "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
                 "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
             }
+        },
+        {
+            "name": "windows-msvc-ninja-release-cpu",
+            "displayName": "Windows MSVC + Ninja (CPU Release)",
+            "inherits": "windows-msvc-ninja-release",
+            "binaryDir": "${sourceDir}/build/windows-msvc-ninja-release-cpu",
+            "cacheVariables": {
+                "ANOM_ENABLE_TENSORRT": "OFF",
+                "ANOM_ORT_ENABLE_CUDA": "OFF"
+            }
+        },
+        {
+            "name": "windows-msvc-ninja-release-nvidia",
+            "displayName": "Windows MSVC + Ninja (NVIDIA Release)",
+            "inherits": "windows-msvc-ninja-release",
+            "binaryDir": "${sourceDir}/build/windows-msvc-ninja-release-nvidia",
+            "cacheVariables": {
+                "ANOM_ENABLE_TENSORRT": "ON",
+                "ANOM_ORT_ENABLE_CUDA": "ON"
+            }
+        },
+        {
+            "name": "linux-gcc-ninja-release-cpu",
+            "displayName": "Linux GCC + Ninja (CPU Release)",
+            "inherits": "linux-gcc-ninja-release",
+            "binaryDir": "${sourceDir}/build/linux-gcc-ninja-release-cpu",
+            "cacheVariables": {
+                "ANOM_ENABLE_TENSORRT": "OFF",
+                "ANOM_ORT_ENABLE_CUDA": "OFF"
+            }
+        },
+        {
+            "name": "linux-gcc-ninja-release-nvidia",
+            "displayName": "Linux GCC + Ninja (NVIDIA Release)",
+            "inherits": "linux-gcc-ninja-release",
+            "binaryDir": "${sourceDir}/build/linux-gcc-ninja-release-nvidia",
+            "cacheVariables": {
+                "ANOM_ENABLE_TENSORRT": "ON",
+                "ANOM_ORT_ENABLE_CUDA": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -149,6 +189,22 @@
         {
             "name": "linux-clang-sanitizers",
             "configurePreset": "linux-clang-sanitizers"
+        },
+        {
+            "name": "windows-msvc-ninja-release-cpu",
+            "configurePreset": "windows-msvc-ninja-release-cpu"
+        },
+        {
+            "name": "windows-msvc-ninja-release-nvidia",
+            "configurePreset": "windows-msvc-ninja-release-nvidia"
+        },
+        {
+            "name": "linux-gcc-ninja-release-cpu",
+            "configurePreset": "linux-gcc-ninja-release-cpu"
+        },
+        {
+            "name": "linux-gcc-ninja-release-nvidia",
+            "configurePreset": "linux-gcc-ninja-release-nvidia"
         }
     ],
     "testPresets": [
@@ -187,6 +243,26 @@
         {
             "name": "linux-clang-sanitizers",
             "configurePreset": "linux-clang-sanitizers",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "windows-msvc-ninja-release-cpu",
+            "configurePreset": "windows-msvc-ninja-release-cpu",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "windows-msvc-ninja-release-nvidia",
+            "configurePreset": "windows-msvc-ninja-release-nvidia",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "linux-gcc-ninja-release-cpu",
+            "configurePreset": "linux-gcc-ninja-release-cpu",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "linux-gcc-ninja-release-nvidia",
+            "configurePreset": "linux-gcc-ninja-release-nvidia",
             "output": { "outputOnFailure": true }
         }
     ]

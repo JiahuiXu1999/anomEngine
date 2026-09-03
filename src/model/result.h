@@ -28,6 +28,9 @@ enum class ErrorCode {
     OutOfMemory,
     NotInitialized,
     InternalError,
+    PluginNotFound,
+    PluginAbiMismatch,
+    DeviceUnavailable,
 };
 
 struct Status {

@@ -123,7 +123,7 @@ public:
                 }
 #else
                 return Status::error(
-                    ErrorCode::BackendFailure,
+                    ErrorCode::DeviceUnavailable,
                     "CUDAExecutionProvider was requested but this build uses CPU-only ONNX Runtime",
                     "Configure with -DANOM_ORT_ENABLE_CUDA=ON and a GPU ONNX Runtime package");
 #endif
