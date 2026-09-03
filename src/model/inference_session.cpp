@@ -65,13 +65,12 @@ Result<void> validateInputSignature(const ModelManifest& manifest,
 
 struct RuntimeCandidate {
     RuntimeBackend backend{RuntimeBackend::OnnxRuntime};
-    OrtExecutionProvider provider{OrtExecutionProvider::Cpu};
+    bool fallback{false};
 };
 
 const char* candidateName(const RuntimeCandidate& candidate) noexcept {
-    if (candidate.backend == RuntimeBackend::TensorRT) return "tensorrt/cuda";
-    return candidate.provider == OrtExecutionProvider::Cuda
-        ? "onnxruntime/cuda" : "onnxruntime/cpu";
+    return candidate.backend == RuntimeBackend::TensorRT
+        ? "tensorrt/cuda" : "onnxruntime/cpu";
 }
 
 bool retryableRuntimeFailure(ErrorCode code) noexcept {
@@ -101,25 +100,23 @@ std::string joinAttempts(const std::vector<std::string>& attempts) {
 Result<std::vector<RuntimeCandidate>> runtimeCandidates(
     const BackendConfig& config, const LoadOptions& options) {
     std::vector<RuntimeCandidate> result;
-    const auto add = [&](RuntimeBackend backend, OrtExecutionProvider provider) {
+    const auto add = [&](RuntimeBackend backend, bool fallback = false) {
         if (options.precision == PrecisionPreference::Float16 &&
             backend != RuntimeBackend::TensorRT) return;
         if (backend == RuntimeBackend::TensorRT &&
             config.enginePath.empty() && config.onnxPath.empty()) return;
         if (backend == RuntimeBackend::OnnxRuntime && config.onnxPath.empty()) return;
         for (const auto& candidate : result) {
-            if (candidate.backend == backend && candidate.provider == provider) return;
+            if (candidate.backend == backend) return;
         }
-        result.push_back({backend, provider});
+        result.push_back({backend, fallback});
     };
 
     const auto constrainedBackend = options.backend;
     switch (options.devicePreference) {
         case DevicePreference::Manifest: {
             const RuntimeBackend backend = constrainedBackend.value_or(config.backend);
-            const OrtExecutionProvider provider =
-                options.ortProvider.value_or(config.ortProvider);
-            add(backend, provider);
+            add(backend);
             break;
         }
         case DevicePreference::Cpu:
@@ -127,25 +124,20 @@ Result<std::vector<RuntimeCandidate>> runtimeCandidates(
                 return Status::error(ErrorCode::InvalidArgument,
                                      "TensorRT cannot satisfy a CPU execution request");
             }
-            add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cpu);
+            add(RuntimeBackend::OnnxRuntime);
             break;
         case DevicePreference::Gpu:
             if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
-                add(RuntimeBackend::TensorRT, OrtExecutionProvider::Cuda);
-            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)
-                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cuda);
+                add(RuntimeBackend::TensorRT);
             if (options.fallbackPolicy == FallbackPolicy::LoadOnly &&
-                (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)) {
-                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cpu);
-            }
+                (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime))
+                add(RuntimeBackend::OnnxRuntime, true);
             break;
         case DevicePreference::Auto:
             if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
-                add(RuntimeBackend::TensorRT, OrtExecutionProvider::Cuda);
-            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime) {
-                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cuda);
-                add(RuntimeBackend::OnnxRuntime, OrtExecutionProvider::Cpu);
-            }
+                add(RuntimeBackend::TensorRT);
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)
+                add(RuntimeBackend::OnnxRuntime, !constrainedBackend);
             break;
     }
 
@@ -200,10 +192,8 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
         cv::Size(manifest.input.resizeWidth, manifest.input.resizeHeight));
     backendConfig.inputHeight = inputSize.height;
     backendConfig.inputWidth = inputSize.width;
-    backendConfig.ortProvider = options.ortProvider.value_or(manifest.runtime.ortProvider);
     backendConfig.ortGraphOptimization = manifest.runtime.ortGraphOptimization;
     backendConfig.ortExecutionMode = manifest.runtime.ortExecutionMode;
-    backendConfig.ortStrictProvider = manifest.runtime.ortStrictProvider;
     backendConfig.deviceId = options.deviceId.value_or(manifest.runtime.deviceId);
     backendConfig.intraOpThreads = manifest.runtime.intraOpThreads;
     backendConfig.interOpThreads = manifest.runtime.interOpThreads;
@@ -233,9 +223,11 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
     for (const auto& candidate : candidates.value()) {
         BackendConfig selectedConfig = backendConfig;
         selectedConfig.backend = candidate.backend;
-        selectedConfig.ortProvider = candidate.provider;
-        if (candidate.provider == OrtExecutionProvider::Cuda)
-            selectedConfig.ortStrictProvider = true;
+        if (candidate.fallback && attempts.empty()) {
+            attempts.push_back(options.devicePreference == DevicePreference::Gpu
+                ? "gpu request: ONNX Runtime is CPU-only"
+                : "tensorrt/cuda: no compatible TensorRT runtime was available");
+        }
 
         auto backend = createRuntimeBackend(candidate.backend, options.pluginDirectory);
         if (!backend) {
@@ -266,14 +258,14 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
                                  std::move(adapter.value())));
         session->modelInfo_.runtimeBackend = candidate.backend;
         session->modelInfo_.executionProvider = candidate.backend == RuntimeBackend::TensorRT
-            ? "cuda" : toString(candidate.provider);
+            ? "cuda" : "cpu";
         session->executionInfo_.requestedDevice = options.devicePreference;
         session->executionInfo_.runtimeBackend = candidate.backend;
         session->executionInfo_.executionProvider = candidate.backend == RuntimeBackend::TensorRT
-            ? OrtExecutionProvider::Cuda : candidate.provider;
-        session->executionInfo_.deviceId = candidate.provider == OrtExecutionProvider::Cpu
+            ? "cuda" : "cpu";
+        session->executionInfo_.deviceId = candidate.backend == RuntimeBackend::OnnxRuntime
             ? -1 : selectedConfig.deviceId;
-        session->executionInfo_.deviceName = candidate.provider == OrtExecutionProvider::Cpu
+        session->executionInfo_.deviceName = candidate.backend == RuntimeBackend::OnnxRuntime
             ? "CPU" : "CUDA device " + std::to_string(selectedConfig.deviceId);
         session->executionInfo_.precision =
             candidate.backend == RuntimeBackend::TensorRT && selectedConfig.fp16

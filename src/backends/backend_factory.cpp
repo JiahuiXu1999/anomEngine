@@ -61,10 +61,8 @@ public:
         converted.input_layout = static_cast<int32_t>(config.inputLayout);
         converted.input_height = config.inputHeight;
         converted.input_width = config.inputWidth;
-        converted.ort_provider = static_cast<int32_t>(config.ortProvider);
         converted.ort_graph_optimization = static_cast<int32_t>(config.ortGraphOptimization);
         converted.ort_execution_mode = static_cast<int32_t>(config.ortExecutionMode);
-        converted.ort_strict_provider = config.ortStrictProvider ? 1 : 0;
         converted.device_id = config.deviceId;
         converted.intra_op_threads = config.intraOpThreads;
         converted.inter_op_threads = config.interOpThreads;

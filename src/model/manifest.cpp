@@ -155,13 +155,6 @@ RuntimeBackend parseRuntimeBackend(const std::string& value) {
     throw ManifestError("Unsupported runtime backend '" + value + "'", "$.runtime.backend");
 }
 
-OrtExecutionProvider parseOrtProvider(const std::string& value) {
-    if (value == "cpu") return OrtExecutionProvider::Cpu;
-    if (value == "cuda") return OrtExecutionProvider::Cuda;
-    throw ManifestError("Unsupported ONNX Runtime execution provider '" + value + "'",
-                        "$.runtime.provider");
-}
-
 OrtGraphOptimization parseOrtGraphOptimization(const std::string& value) {
     if (value == "disabled") return OrtGraphOptimization::Disabled;
     if (value == "basic") return OrtGraphOptimization::Basic;
@@ -275,10 +268,14 @@ ModelManifest parseManifest(const json::Value& value) {
         manifest.runtime.workspaceBytes = static_cast<std::size_t>(megabytes) * 1024ULL * 1024ULL;
     }
 
-    manifest.runtime.ortProvider = parseOrtProvider(
-        optionalOr<std::string>(runtime, "provider", "cpu", &Reader::string));
-    manifest.runtime.ortStrictProvider = optionalOr<bool>(
-        runtime, "strict_provider", true, &Reader::boolean);
+    if (runtime.optional("provider")) {
+        throw ManifestError("runtime.provider was removed; ONNX Runtime is CPU-only",
+                            "$.runtime.provider");
+    }
+    if (runtime.optional("strict_provider")) {
+        throw ManifestError("runtime.strict_provider is no longer supported",
+                            "$.runtime.strict_provider");
+    }
     manifest.runtime.deviceId = optionalOr<int>(runtime, "device_id", 0, &Reader::integer);
     manifest.runtime.intraOpThreads = optionalOr<int>(
         runtime, "intra_op_threads", 0, &Reader::integer);

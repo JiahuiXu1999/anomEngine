@@ -113,8 +113,6 @@ void testExampleManifests() {
     require(padimOrt.ok(), padimOrt.status().describe());
     require(padimOrt.value().manifest().runtime.backend == RuntimeBackend::OnnxRuntime,
             "PaDiM ORT example selected wrong runtime backend");
-    require(padimOrt.value().manifest().runtime.ortProvider == OrtExecutionProvider::Cpu,
-            "PaDiM ORT example selected wrong execution provider");
     auto efficientad = ModelPackage::load(examples / "efficientad.manifest.json");
     require(efficientad.ok(), efficientad.status().describe());
     require(efficientad.value().manifest().algorithm == AlgorithmType::EfficientAD,

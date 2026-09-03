@@ -22,7 +22,6 @@ enum class AlgorithmType { PatchCore, Padim, Direct, EfficientAD, DFKDE, SPADE, 
 enum class GraphContract { FeaturePyramid, Prediction };
 enum class EngineLoadPolicy { EngineOnly, PreferEngine, BuildIfMissing };
 enum class RuntimeBackend { TensorRT, OnnxRuntime };
-enum class OrtExecutionProvider { Cpu, Cuda };
 enum class OrtGraphOptimization { Disabled, Basic, Extended, All };
 enum class OrtExecutionMode { Sequential, Parallel };
 enum class DevicePreference { Manifest, Auto, Cpu, Gpu };
@@ -172,7 +171,7 @@ struct ModelInfo {
 struct ExecutionInfo {
     DevicePreference requestedDevice{DevicePreference::Manifest};
     RuntimeBackend runtimeBackend{RuntimeBackend::TensorRT};
-    OrtExecutionProvider executionProvider{OrtExecutionProvider::Cuda};
+    std::string executionProvider{"cuda"};
     int deviceId{0};
     std::string deviceName;
     PrecisionPreference precision{PrecisionPreference::Auto};
@@ -184,6 +183,5 @@ struct ExecutionInfo {
 [[nodiscard]] const char* toString(DataType type) noexcept;
 [[nodiscard]] const char* toString(AlgorithmType type) noexcept;
 [[nodiscard]] const char* toString(RuntimeBackend type) noexcept;
-[[nodiscard]] const char* toString(OrtExecutionProvider type) noexcept;
 
 }  // namespace anom::model

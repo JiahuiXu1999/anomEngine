@@ -19,10 +19,10 @@ typedef struct anom_backend_config_v1 {
     int32_t input_layout;
     int32_t input_height;
     int32_t input_width;
-    int32_t ort_provider;
+    int32_t reserved0;
     int32_t ort_graph_optimization;
     int32_t ort_execution_mode;
-    int32_t ort_strict_provider;
+    int32_t reserved1;
     int32_t device_id;
     int32_t intra_op_threads;
     int32_t inter_op_threads;

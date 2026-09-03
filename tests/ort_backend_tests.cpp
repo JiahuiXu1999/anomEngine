@@ -33,7 +33,6 @@ void testIdentityModel() {
     BackendConfig config;
     config.backend = RuntimeBackend::OnnxRuntime;
     config.onnxPath = std::filesystem::path(ANOM_TEST_DATA_DIR) / "identity_dynamic.onnx";
-    config.ortProvider = OrtExecutionProvider::Cpu;
     config.maxBatchSize = 8;
     config.intraOpThreads = 1;
     config.interOpThreads = 1;
@@ -78,13 +77,6 @@ void testIdentityModel() {
     require(!rejected && rejected.status().code == ErrorCode::TensorShapeMismatch,
             "Static ONNX dimension mismatch was not rejected");
 
-    BackendConfig cudaConfig = config;
-    cudaConfig.ortProvider = OrtExecutionProvider::Cuda;
-    auto cpuOnlyBackend = createRuntimeBackend(RuntimeBackend::OnnxRuntime);
-    require(cpuOnlyBackend.ok(), cpuOnlyBackend.status().describe());
-    auto cudaRejected = cpuOnlyBackend.value()->load(cudaConfig);
-    require(!cudaRejected && cudaRejected.status().code == ErrorCode::DeviceUnavailable,
-            "CPU-only ORT build did not reject CUDAExecutionProvider");
 }
 
 void testInferenceSessionIntegration() {

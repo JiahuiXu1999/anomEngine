@@ -88,9 +88,9 @@ anom_session_get_execution_info(session, &execution);
    execution.fallback_reason_utf8 describe the actual runtime. */
 ```
 
-`ANOM_DEVICE_CPU` selects ONNX Runtime CPU. `ANOM_DEVICE_GPU` tries TensorRT and then ONNX Runtime CUDA;
+`ANOM_DEVICE_CPU` selects ONNX Runtime CPU. `ANOM_DEVICE_GPU` selects TensorRT;
 `ANOM_FALLBACK_LOAD_ONLY` additionally permits ONNX Runtime CPU when GPU initialization fails. `ANOM_DEVICE_AUTO`
-tries TensorRT/CUDA, ONNX Runtime/CUDA, and ONNX Runtime/CPU in that order. A non-empty `backend_utf8` constrains
+tries TensorRT/CUDA and then ONNX Runtime/CPU. A non-empty `backend_utf8` constrains
 selection to `tensorrt` or `onnxruntime`. Fallback only occurs while creating or warming the session; prediction
 failures are never silently retried on a different device.
 
@@ -152,12 +152,10 @@ runtime never generates indices or fits Gaussian statistics.
 ## Runtime behavior
 
 - `runtime.backend` selects `tensorrt` (the backwards-compatible default) or `onnxruntime`.
-- ONNX Runtime supports `cpu` and, when built with `ANOM_ORT_ENABLE_CUDA=ON`, `cuda`. `strict_provider=true`
-  disables ORT's implicit CPU fallback for CUDA sessions so an unsupported deployment fails during load instead
-  of silently changing latency characteristics.
+- ONNX Runtime uses the CPU execution provider. NVIDIA GPU execution is handled exclusively by TensorRT.
 - ORT discovers every graph input/output from model metadata, preserves dynamic dimensions in the signature,
   validates concrete request shapes and copies resolved dynamic outputs into the backend-neutral `TensorMap`.
-- ORT thread counts, sequential/parallel execution, graph optimization, memory pattern, CPU arena, device id, and
+- ORT thread counts, sequential/parallel execution, graph optimization, memory pattern, CPU arena, and
   JSON profiling are controlled by the manifest. Zero thread counts delegate sizing to ORT.
 - `fp16`, `workspace_mb`, engine cache, and engine load policy remain TensorRT settings. ORT preserves the data
   types exported in the ONNX graph and does not silently rewrite an FP32 model to FP16.
@@ -194,8 +192,8 @@ cmake -S . -B build -DANOM_ONNXRUNTIME_ROOT=D:/sdk/onnxruntime
 ```
 
 The backend is enabled by default and configuration fails early when its headers, import library, or Windows DLL
-are missing. Use `-DANOM_ENABLE_ONNXRUNTIME=OFF` for a TensorRT-only build. CUDA EP requires a GPU-enabled ORT
-distribution and `-DANOM_ORT_ENABLE_CUDA=ON`; a CPU package intentionally rejects a CUDA manifest.
+are missing. Use `-DANOM_ENABLE_ONNXRUNTIME=OFF` for a TensorRT-only build. Only the CPU execution provider is
+supported; NVIDIA GPU execution is provided by the TensorRT backend.
 
 `examples/padim-ort.manifest.json` shows a complete PaDiM package configuration. PaDiM itself remains backend
 independent: its adapter consumes the same explicitly named feature tensors from ORT or TensorRT.

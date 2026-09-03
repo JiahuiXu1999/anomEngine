@@ -11,7 +11,6 @@
             "hidden": true,
             "cacheVariables": {
                 "ANOM_ENABLE_ONNXRUNTIME": "ON",
-                "ANOM_ORT_ENABLE_CUDA": "OFF",
                 "ANOM_ENABLE_STRICT_WARNINGS": "ON",
                 "BUILD_TESTING": "ON"
             }
@@ -124,8 +123,7 @@
             "inherits": "windows-msvc-ninja-release",
             "binaryDir": "${sourceDir}/build/windows-msvc-ninja-release-cpu",
             "cacheVariables": {
-                "ANOM_ENABLE_TENSORRT": "OFF",
-                "ANOM_ORT_ENABLE_CUDA": "OFF"
+                "ANOM_ENABLE_TENSORRT": "OFF"
             }
         },
         {
@@ -134,8 +132,7 @@
             "inherits": "windows-msvc-ninja-release",
             "binaryDir": "${sourceDir}/build/windows-msvc-ninja-release-nvidia",
             "cacheVariables": {
-                "ANOM_ENABLE_TENSORRT": "ON",
-                "ANOM_ORT_ENABLE_CUDA": "ON"
+                "ANOM_ENABLE_TENSORRT": "ON"
             }
         },
         {
@@ -144,8 +141,7 @@
             "inherits": "linux-gcc-ninja-release",
             "binaryDir": "${sourceDir}/build/linux-gcc-ninja-release-cpu",
             "cacheVariables": {
-                "ANOM_ENABLE_TENSORRT": "OFF",
-                "ANOM_ORT_ENABLE_CUDA": "OFF"
+                "ANOM_ENABLE_TENSORRT": "OFF"
             }
         },
         {
@@ -154,8 +150,7 @@
             "inherits": "linux-gcc-ninja-release",
             "binaryDir": "${sourceDir}/build/linux-gcc-ninja-release-nvidia",
             "cacheVariables": {
-                "ANOM_ENABLE_TENSORRT": "ON",
-                "ANOM_ORT_ENABLE_CUDA": "ON"
+                "ANOM_ENABLE_TENSORRT": "ON"
             }
         }
     ],

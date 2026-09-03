@@ -98,7 +98,7 @@ enum {
 
 /*
  * Session options with explicit execution-device selection. AUTO tries
- * TensorRT/CUDA, ONNX Runtime/CUDA, then ONNX Runtime/CPU. A non-empty
+ * TensorRT/CUDA, then ONNX Runtime/CPU. A non-empty
  * backend_utf8 constrains selection to "tensorrt" or "onnxruntime".
  */
 typedef struct anom_session_options_v2 {

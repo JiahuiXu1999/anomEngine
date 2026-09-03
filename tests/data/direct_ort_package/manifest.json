@@ -17,8 +17,6 @@
   "runtime": {
     "backend": "onnxruntime",
     "onnx": "direct_constant.onnx",
-    "provider": "cpu",
-    "strict_provider": true,
     "max_batch_size": 1,
     "intra_op_threads": 1,
     "inter_op_threads": 1

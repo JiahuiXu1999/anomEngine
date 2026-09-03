@@ -26,7 +26,6 @@ endif()
 
 option(ANOM_ENABLE_TENSORRT "Build the TensorRT backend plugin" ON)
 option(ANOM_ENABLE_ONNXRUNTIME "Build the ONNX Runtime backend plugin" ON)
-option(ANOM_ORT_ENABLE_CUDA "Enable ONNX Runtime CUDAExecutionProvider support" OFF)
 option(ANOM_BUILD_ALGO_DIRECT "Build the direct-prediction algorithm plugin" ON)
 option(ANOM_BUILD_ALGO_EFFICIENTAD "Build the EfficientAD algorithm plugin" ON)
 option(ANOM_BUILD_ALGO_DFKDE "Build the DFKDE algorithm plugin" ON)
@@ -198,10 +197,6 @@ if(ANOM_ENABLE_TENSORRT)
         INTERFACE_INCLUDE_DIRECTORIES "${ANOM_TENSORRT_INCLUDE_DIR}")
 endif()
 
-if(ANOM_ORT_ENABLE_CUDA AND NOT ANOM_ENABLE_ONNXRUNTIME)
-    message(FATAL_ERROR "ANOM_ORT_ENABLE_CUDA requires ANOM_ENABLE_ONNXRUNTIME")
-endif()
-
 if(ANOM_ENABLE_ONNXRUNTIME)
     set(_anom_ort_include_hints "")
     set(_anom_ort_library_hints "")
@@ -250,26 +245,6 @@ if(ANOM_ENABLE_ONNXRUNTIME)
     endif()
     add_library(anom::onnxruntime ALIAS anom_onnxruntime)
 
-    set(ANOM_ORT_PROVIDER_RUNTIME_FILES "")
-    if(ANOM_ORT_ENABLE_CUDA)
-        find_path(ANOM_ORT_CUDA_FACTORY_INCLUDE_DIR NAMES cuda_provider_factory.h
-            HINTS "${ANOM_ONNXRUNTIME_INCLUDE_DIR}" ${_anom_ort_include_hints})
-        if(NOT ANOM_ORT_CUDA_FACTORY_INCLUDE_DIR)
-            message(FATAL_ERROR "ONNX Runtime CUDA provider headers were not found")
-        endif()
-        if(WIN32)
-            find_file(ANOM_ORT_CUDA_PROVIDER_LIBRARY NAMES onnxruntime_providers_cuda.dll
-                HINTS ${_anom_ort_runtime_hints})
-            find_file(ANOM_ORT_SHARED_PROVIDER_LIBRARY NAMES onnxruntime_providers_shared.dll
-                HINTS ${_anom_ort_runtime_hints})
-            if(NOT ANOM_ORT_CUDA_PROVIDER_LIBRARY OR NOT ANOM_ORT_SHARED_PROVIDER_LIBRARY)
-                message(FATAL_ERROR "ONNX Runtime CUDA provider DLLs were not found")
-            endif()
-            list(APPEND ANOM_ORT_PROVIDER_RUNTIME_FILES
-                "${ANOM_ORT_CUDA_PROVIDER_LIBRARY}"
-                "${ANOM_ORT_SHARED_PROVIDER_LIBRARY}")
-        endif()
-    endif()
 endif()
 
 # Core library and public C API -------------------------------------------------
@@ -432,11 +407,6 @@ if(ANOM_ENABLE_ONNXRUNTIME)
         ANOM_BACKEND_ONNXRUNTIME=1 ANOM_BACKEND_NAME="onnxruntime")
     target_include_directories(anom_backend_onnxruntime PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}")
     target_link_libraries(anom_backend_onnxruntime PRIVATE anom::opencv anom::onnxruntime)
-    if(ANOM_ORT_ENABLE_CUDA)
-        target_compile_definitions(anom_backend_onnxruntime PRIVATE ANOM_ORT_ENABLE_CUDA=1)
-        target_include_directories(anom_backend_onnxruntime SYSTEM PRIVATE
-            "${ANOM_ORT_CUDA_FACTORY_INCLUDE_DIR}")
-    endif()
     set_target_properties(anom_backend_onnxruntime PROPERTIES
         PREFIX "" OUTPUT_NAME "anom_backend_onnxruntime"
         INSTALL_RPATH "${ANOM_ORIGIN_RPATH}")
@@ -492,8 +462,7 @@ if(BUILD_TESTING)
         target_link_libraries(c_api_contract_tests PRIVATE anom::engine)
         target_compile_definitions(c_api_contract_tests PRIVATE
             ANOM_TEST_DATA_DIR="${ANOM_TEST_ROOT}/data"
-            ANOM_TEST_TENSORRT_ENABLED=$<BOOL:${ANOM_ENABLE_TENSORRT}>
-            ANOM_TEST_ORT_CUDA_ENABLED=$<BOOL:${ANOM_ORT_ENABLE_CUDA}>)
+            ANOM_TEST_TENSORRT_ENABLED=$<BOOL:${ANOM_ENABLE_TENSORRT}>)
         add_dependencies(c_api_contract_tests anom_backend_onnxruntime anom_algo_direct)
         if(ANOM_BUILD_ALGO_PATCHCORE)
             add_dependencies(c_api_contract_tests anom_algo_patchcore)
@@ -550,7 +519,7 @@ if(WIN32)
     endif()
     if(ANOM_ENABLE_ONNXRUNTIME)
         list(APPEND ANOM_RUNTIME_FILES
-            "$<TARGET_FILE:anom::onnxruntime>" ${ANOM_ORT_PROVIDER_RUNTIME_FILES})
+            "$<TARGET_FILE:anom::onnxruntime>")
     endif()
 
     function(anom_deploy_runtime_dependencies target_name)

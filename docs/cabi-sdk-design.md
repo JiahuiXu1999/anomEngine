@@ -137,7 +137,6 @@ typedef struct anom_region {
 
 typedef struct anom_load_options {
     int backend;      /* -1 用 manifest 默认；0 TensorRT；1 ONNX Runtime */
-    int ort_provider; /* -1 默认；0 CPU；1 CUDA */
     int engine_load_policy; /* -1 默认；0 engine_only；1 prefer_engine；2 build_if_missing */
     int fp16;         /* -1 默认；0/1 */
     int warmup;       /* 0/1 */

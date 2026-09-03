@@ -1,12 +1,6 @@
 #include "backends/ort_backend.h"
 
 #include <onnxruntime_cxx_api.h>
-#include <onnxruntime_session_options_config_keys.h>
-
-#if defined(ANOM_ORT_ENABLE_CUDA)
-#include <cuda_provider_factory.h>
-#endif
-
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -111,22 +105,6 @@ public:
                 const std::string prefix = config.profileFilePrefix.string();
 #endif
                 options.EnableProfiling(prefix.c_str());
-            }
-
-            if (config.ortProvider == OrtExecutionProvider::Cuda) {
-#if defined(ANOM_ORT_ENABLE_CUDA)
-                Ort::ThrowOnError(
-                    OrtSessionOptionsAppendExecutionProvider_CUDA(options, config.deviceId));
-                if (config.ortStrictProvider) {
-                    // ORT otherwise assigns unsupported CUDA nodes to the default CPU EP.
-                    options.AddConfigEntry(kOrtSessionOptionsDisableCPUEPFallback, "1");
-                }
-#else
-                return Status::error(
-                    ErrorCode::DeviceUnavailable,
-                    "CUDAExecutionProvider was requested but this build uses CPU-only ONNX Runtime",
-                    "Configure with -DANOM_ORT_ENABLE_CUDA=ON and a GPU ONNX Runtime package");
-#endif
             }
 
             session_ = std::make_unique<Ort::Session>(env_, config.onnxPath.c_str(), options);

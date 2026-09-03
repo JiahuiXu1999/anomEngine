@@ -92,7 +92,7 @@ struct anom_model {
         backend = anom::model::toString(manifest.runtime.backend);
         executionProvider = manifest.runtime.backend == RuntimeBackend::TensorRT
                                 ? "cuda"
-                                : anom::model::toString(manifest.runtime.ortProvider);
+                                : "cpu";
     }
 
     ModelPackage package;
@@ -527,10 +527,8 @@ Result<std::unique_ptr<IRuntimeBackend>> createFeatureBackend(
         cv::Size(manifest.input.resizeWidth, manifest.input.resizeHeight));
     config.inputHeight = inputSize.height;
     config.inputWidth = inputSize.width;
-    config.ortProvider = manifest.runtime.ortProvider;
     config.ortGraphOptimization = manifest.runtime.ortGraphOptimization;
     config.ortExecutionMode = manifest.runtime.ortExecutionMode;
-    config.ortStrictProvider = manifest.runtime.ortStrictProvider;
     config.deviceId = manifest.runtime.deviceId;
     config.intraOpThreads = manifest.runtime.intraOpThreads;
     config.interOpThreads = manifest.runtime.interOpThreads;

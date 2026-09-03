@@ -403,7 +403,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_execution_info(
     const auto& info = session->implementation->executionInfo();
     outInfo->requested_device = publicDevice(info.requestedDevice);
     outInfo->backend_utf8 = anom::model::toString(info.runtimeBackend);
-    outInfo->execution_provider_utf8 = anom::model::toString(info.executionProvider);
+    outInfo->execution_provider_utf8 = info.executionProvider.c_str();
     outInfo->device_id = info.deviceId;
     outInfo->device_name_utf8 = info.deviceName.c_str();
     outInfo->precision = publicPrecision(info.precision);

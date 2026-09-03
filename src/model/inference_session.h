@@ -16,7 +16,6 @@ class IRuntimeBackend;
 
 struct LoadOptions {
     std::optional<RuntimeBackend> backend;
-    std::optional<OrtExecutionProvider> ortProvider;
     std::optional<EngineLoadPolicy> engineLoadPolicy;
     std::optional<bool> fp16;
     std::optional<int> deviceId;

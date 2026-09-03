@@ -17,8 +17,6 @@
   "runtime": {
     "backend": "onnxruntime",
     "onnx": "backbone.onnx",
-    "provider": "cpu",
-    "strict_provider": true,
     "max_batch_size": 4,
     "intra_op_threads": 0,
     "inter_op_threads": 0,

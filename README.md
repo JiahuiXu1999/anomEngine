@@ -16,8 +16,7 @@ pluggable algorithms, and TensorRT/ONNX Runtime backends.
   interfaces out of the public DLL/shared-library boundary.
 - Algorithm plugins currently cover Direct Prediction, EfficientAD, DFKDE,
   PaDiM, PatchCore, SPADE, and YOLO-style prediction outputs.
-- Backend plugins support TensorRT and ONNX Runtime, including optional ONNX
-  Runtime CUDA Execution Provider support.
+- Backend plugins support TensorRT on NVIDIA GPUs and ONNX Runtime on CPUs.
 - A manifest-driven model package declares tensor bindings, preprocessing,
   postprocessing, runtime settings, and optional SHA-256 artifact checksums.
 - Shared postprocessing produces image scores, anomaly maps, masks, connected
@@ -69,8 +68,8 @@ listed below, and follow each dependency's own license terms.
 
 The original presets enable all algorithms, both backends, strict warnings, and
 tests. Explicit `-cpu` and `-nvidia` variants are also available; CPU presets do
-not require TensorRT or CUDA, while NVIDIA presets enable TensorRT and the ONNX
-Runtime CUDA provider. After making the required dependencies discoverable, run
+not require TensorRT or CUDA, while NVIDIA presets enable TensorRT alongside the
+CPU-only ONNX Runtime fallback. After making the required dependencies discoverable, run
 the preset matching your platform and deployment:
 
 ```powershell

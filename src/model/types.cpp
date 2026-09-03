@@ -96,12 +96,4 @@ const char* toString(RuntimeBackend type) noexcept {
     return "unknown";
 }
 
-const char* toString(OrtExecutionProvider type) noexcept {
-    switch (type) {
-        case OrtExecutionProvider::Cpu: return "cpu";
-        case OrtExecutionProvider::Cuda: return "cuda";
-    }
-    return "unknown";
-}
-
 }  // namespace anom::model

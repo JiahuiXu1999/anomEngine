@@ -37,10 +37,8 @@ struct RuntimeConfig {
     int maxBatchSize{1};
     std::size_t workspaceBytes{2ULL * 1024ULL * 1024ULL * 1024ULL};
 
-    OrtExecutionProvider ortProvider{OrtExecutionProvider::Cpu};
     OrtGraphOptimization ortGraphOptimization{OrtGraphOptimization::All};
     OrtExecutionMode ortExecutionMode{OrtExecutionMode::Sequential};
-    bool ortStrictProvider{true};
     int deviceId{0};
     int intraOpThreads{0};
     int interOpThreads{0};

@@ -20,10 +20,8 @@ struct BackendConfig {
     int inputHeight{224};
     int inputWidth{224};
 
-    OrtExecutionProvider ortProvider{OrtExecutionProvider::Cpu};
     OrtGraphOptimization ortGraphOptimization{OrtGraphOptimization::All};
     OrtExecutionMode ortExecutionMode{OrtExecutionMode::Sequential};
-    bool ortStrictProvider{true};
     int deviceId{0};
     int intraOpThreads{0};
     int interOpThreads{0};

@@ -45,8 +45,6 @@
         "fp16": { "type": "boolean" },
         "max_batch_size": { "type": "integer", "minimum": 1 },
         "workspace_mb": { "type": "integer", "minimum": 1 },
-        "provider": { "enum": ["cpu", "cuda"] },
-        "strict_provider": { "type": "boolean" },
         "device_id": { "type": "integer", "minimum": 0 },
         "intra_op_threads": { "type": "integer", "minimum": 0 },
         "inter_op_threads": { "type": "integer", "minimum": 0 },

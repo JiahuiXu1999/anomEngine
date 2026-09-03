@@ -118,7 +118,6 @@ void testExecutionSelectionCAbi() {
             "CPU request unexpectedly accepted TensorRT");
     require(session == nullptr, "Rejected v2 create did not clear its output");
 
-#if !ANOM_TEST_ORT_CUDA_ENABLED
     options.backend_utf8 = "onnxruntime";
     options.device = ANOM_DEVICE_GPU;
     options.fallback = ANOM_FALLBACK_LOAD_ONLY;
@@ -141,11 +140,10 @@ void testExecutionSelectionCAbi() {
     session = reinterpret_cast<anom_session_t*>(1);
     require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
                 ANOM_STATUS_UNSUPPORTED,
-            "Strict GPU request unexpectedly succeeded on a CPU-only ORT build");
+            "Strict GPU request unexpectedly accepted the CPU-only ORT backend");
     require(session == nullptr, "Rejected strict GPU create did not clear its output");
-#endif
 
-#if !ANOM_TEST_TENSORRT_ENABLED && !ANOM_TEST_ORT_CUDA_ENABLED
+#if !ANOM_TEST_TENSORRT_ENABLED
     options.backend_utf8 = nullptr;
     options.device = ANOM_DEVICE_AUTO;
     options.fallback = ANOM_FALLBACK_NONE;
@@ -302,8 +300,8 @@ void testPatchCoreFitterCAbi() {
       "graph_contract":"feature_pyramid",
       "input":{"tensor":"input","layout":"NCHW","color":"RGB","size":[2,2],
         "mean":[0,0,0],"std":[1,1,1]},
-      "runtime":{"backend":"onnxruntime","onnx":"backbone.onnx","provider":"cpu",
-        "strict_provider":true,"max_batch_size":2,"intra_op_threads":1,"inter_op_threads":1},
+      "runtime":{"backend":"onnxruntime","onnx":"backbone.onnx",
+        "max_batch_size":2,"intra_op_threads":1,"inter_op_threads":1},
       "outputs":{"layer":"output"},
       "algorithm":{"type":"patchcore","index":"memory.faiss",
         "feature_layers":["layer"],"embedding_dimension":3,"num_neighbors":1,

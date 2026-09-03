@@ -76,11 +76,9 @@ int32_t ANOM_PLUGIN_CALL create(const anom_backend_config_v1* source, void** out
         config.inputLayout = static_cast<TensorLayout>(source->input_layout);
         config.inputHeight = source->input_height;
         config.inputWidth = source->input_width;
-        config.ortProvider = static_cast<OrtExecutionProvider>(source->ort_provider);
         config.ortGraphOptimization =
             static_cast<OrtGraphOptimization>(source->ort_graph_optimization);
         config.ortExecutionMode = static_cast<OrtExecutionMode>(source->ort_execution_mode);
-        config.ortStrictProvider = source->ort_strict_provider != 0;
         config.deviceId = source->device_id;
         config.intraOpThreads = source->intra_op_threads;
         config.interOpThreads = source->inter_op_threads;
