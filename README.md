@@ -1,5 +1,7 @@
 # anomEngine
 
+**English** | [简体中文](README.zh-CN.md)
+
 Cross-platform C++20 visual anomaly-detection inference SDK with a stable C ABI,
 pluggable algorithms, and TensorRT/ONNX Runtime backends.
 
