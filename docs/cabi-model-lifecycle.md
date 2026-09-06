@@ -51,22 +51,24 @@ manifest template, overlay the externally exported ONNX graph, and commit.
 
 ## PatchCore and PaDiM fitter
 
-`anom_fitter_create` loads preprocessing and backend settings from a template
-package. The template may omit the generated PatchCore index or PaDiM
-statistics, but its graph and output bindings must be usable.
+PatchCore and PaDiM expose different fitter structures. Their implementations
+share preprocessing and backend machinery, but users never select an algorithm
+through a generic fitter. A template may omit its generated index or statistics,
+but its graph and output bindings must be usable.
 
 ```c
-anom_fitter_options_t options = {0};
+anom_patchcore_fitter_options_t options = {0};
 options.struct_size = sizeof(options);
 options.template_package_utf8 = "models/patchcore-template";
-options.patchcore_coreset_sampling_ratio = 0.1f;
+options.coreset_sampling_ratio = 0.1f;
 
-anom_fitter_t* fitter = NULL;
-anom_fitter_create(&options, &fitter);
-anom_fitter_add_batch(fitter, images, image_count);
-anom_fitter_save_checkpoint(fitter, "work/patchcore.ckpt");
-anom_fitter_finalize(fitter, "models/patchcore/1.0.0");
-anom_fitter_destroy(fitter);
+anom_patchcore_fitter_t fitter = {0};
+fitter.struct_size = sizeof(fitter);
+anom_patchcore_fitter_create(&options, &fitter);
+anom_patchcore_fitter_add_batch(&fitter, images, image_count);
+anom_patchcore_fitter_save_checkpoint(&fitter, "work/patchcore.ckpt");
+anom_patchcore_fitter_finalize(&fitter, "models/patchcore/1.0.0");
+anom_patchcore_fitter_release(&fitter);
 ```
 
 PatchCore templates that already contain a FAISS index seed the fitter with
@@ -82,14 +84,14 @@ If no PaDiM channel indices are provided, the fitter deterministically selects
 the first `embedding_dimension` channels. Applications that require randomized
 channel selection should provide explicit indices.
 
-Fitter calls are synchronous. `anom_fitter_get_progress` can be polled from a
-supervising thread, and `anom_fitter_cancel` requests cancellation between
-backend batches. Except for cancellation and progress polling, a fitter must
-not be called concurrently.
+Fitter calls are synchronous. The algorithm-specific `*_fitter_get_progress`
+function can be polled from a supervising thread, and `*_fitter_cancel`
+requests cancellation between backend batches. Except for cancellation and
+progress polling, a fitter must not be called concurrently.
 
 ## Calibration
 
-`anom_calibrator_create` creates an inference session from any opened model.
+`anom_calibrator_create` creates an internal inference runtime from any opened model.
 Feed representative normal images through `anom_calibrator_add_batch`, then use
 `anom_calibrator_compute` to obtain image and pixel score ranges plus thresholds
 for the requested target false-positive rate.

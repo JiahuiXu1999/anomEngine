@@ -1,4 +1,5 @@
 #include "anomEngine/anomEngine.h"
+#include "anomEngine/algorithms.hpp"
 
 #include "infrastructure/utf8_path.h"
 
@@ -31,19 +32,23 @@ void testPublicCAbi() {
 
     const std::filesystem::path package =
         std::filesystem::path(ANOM_TEST_DATA_DIR) / "direct_ort_package";
-    anom_session_options_t options{};
+    anom_algorithm_options_t options{};
     options.struct_size = sizeof(options);
+    options.device = ANOM_DEVICE_CPU;
+    options.device_id = -1;
+    options.precision = ANOM_PRECISION_FP32;
 
-    anom_session_t* session = nullptr;
+    anom_direct_t direct{};
+    direct.struct_size = sizeof(direct);
     const std::string packageUtf8 = anom::model::pathToUtf8(package);
     const anom_status_t created =
-        anom_session_create(packageUtf8.c_str(), &options, &session);
-    require(created == ANOM_STATUS_OK, "C API session creation failed: " + lastError());
-    require(session != nullptr, "C API returned a null session");
+        anom_direct_load(packageUtf8.c_str(), &options, &direct);
+    require(created == ANOM_STATUS_OK, "Direct load failed: " + lastError());
+    require(direct.internal != nullptr, "Direct load returned an empty object");
 
     anom_model_info_t info{};
     info.struct_size = sizeof(info);
-    require(anom_session_get_model_info(session, &info) == ANOM_STATUS_OK,
+    require(anom_direct_get_model_info(&direct, &info) == ANOM_STATUS_OK,
             "C API model info query failed: " + lastError());
     require(std::string(info.model_id_utf8) == "ort-direct-test", "C API model id is wrong");
     require(std::string(info.algorithm_utf8) == "direct", "C API algorithm is wrong");
@@ -62,7 +67,7 @@ void testPublicCAbi() {
 
     anom_prediction_t prediction{};
     prediction.struct_size = sizeof(prediction);
-    const anom_status_t predicted = anom_session_predict(session, &image, &prediction);
+    const anom_status_t predicted = anom_direct_predict(&direct, &image, &prediction);
     require(predicted == ANOM_STATUS_OK, "C API prediction failed: " + lastError());
     require(std::isfinite(prediction.score), "C API prediction score is not finite");
     require(prediction.map_width == 2 && prediction.map_height == 2,
@@ -74,7 +79,15 @@ void testPublicCAbi() {
     anom_prediction_release(&prediction);
     require(prediction.internal == nullptr && prediction.struct_size == sizeof(prediction),
             "C API prediction release did not reset the result");
-    anom_session_destroy(session);
+    anom_direct_release(&direct);
+    require(direct.internal == nullptr, "Direct release did not reset the object");
+
+    anom_yolo_t yolo{};
+    yolo.struct_size = sizeof(yolo);
+    require(anom_yolo_load(packageUtf8.c_str(), &options, &yolo) ==
+                ANOM_STATUS_ALGORITHM_MISMATCH,
+            "YOLO object accepted a Direct model package");
+    require(yolo.internal == nullptr, "Rejected algorithm load retained state");
 }
 
 void testExecutionSelectionCAbi() {
@@ -82,22 +95,23 @@ void testExecutionSelectionCAbi() {
         std::filesystem::path(ANOM_TEST_DATA_DIR) / "direct_ort_package";
     const std::string packageUtf8 = anom::model::pathToUtf8(package);
 
-    anom_session_options_v2_t options{};
+    anom_algorithm_options_t options{};
     options.struct_size = sizeof(options);
     options.device = ANOM_DEVICE_CPU;
     options.device_id = -1;
     options.fallback = ANOM_FALLBACK_NONE;
     options.precision = ANOM_PRECISION_FP32;
 
-    anom_session_t* session = nullptr;
-    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+    anom_direct_t direct{};
+    direct.struct_size = sizeof(direct);
+    require(anom_direct_load(packageUtf8.c_str(), &options, &direct) ==
                 ANOM_STATUS_OK,
-            "CPU session v2 creation failed: " + lastError());
-    require(session != nullptr, "CPU session v2 returned null");
+            "CPU Direct load failed: " + lastError());
+    require(direct.internal != nullptr, "CPU Direct load returned no state");
 
     anom_execution_info_t execution{};
     execution.struct_size = sizeof(execution);
-    require(anom_session_get_execution_info(session, &execution) == ANOM_STATUS_OK,
+    require(anom_direct_get_execution_info(&direct, &execution) == ANOM_STATUS_OK,
             "Execution info query failed: " + lastError());
     require(execution.requested_device == ANOM_DEVICE_CPU,
             "Execution info lost the requested CPU device");
@@ -109,57 +123,73 @@ void testExecutionSelectionCAbi() {
             "CPU execution info is inconsistent");
     require(execution.precision == ANOM_PRECISION_FP32,
             "CPU execution precision is wrong");
-    anom_session_destroy(session);
+    anom_direct_release(&direct);
 
     options.backend_utf8 = "tensorrt";
-    session = reinterpret_cast<anom_session_t*>(1);
-    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+    require(anom_direct_load(packageUtf8.c_str(), &options, &direct) ==
                 ANOM_STATUS_INVALID_ARGUMENT,
             "CPU request unexpectedly accepted TensorRT");
-    require(session == nullptr, "Rejected v2 create did not clear its output");
+    require(direct.internal == nullptr, "Rejected Direct load retained state");
 
     options.backend_utf8 = "onnxruntime";
     options.device = ANOM_DEVICE_GPU;
     options.fallback = ANOM_FALLBACK_LOAD_ONLY;
     options.precision = ANOM_PRECISION_AUTO;
-    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+    require(anom_direct_load(packageUtf8.c_str(), &options, &direct) ==
                 ANOM_STATUS_OK,
-            "GPU-preferred session did not fall back to CPU: " + lastError());
+            "GPU-preferred Direct object did not fall back to CPU: " + lastError());
     execution = {};
     execution.struct_size = sizeof(execution);
-    require(anom_session_get_execution_info(session, &execution) == ANOM_STATUS_OK,
+    require(anom_direct_get_execution_info(&direct, &execution) == ANOM_STATUS_OK,
             "Fallback execution info query failed: " + lastError());
     require(std::string(execution.execution_provider_utf8) == "cpu" &&
                 execution.fallback_occurred == 1,
             "GPU-preferred session did not report CPU fallback");
     require(execution.fallback_reason_utf8 && *execution.fallback_reason_utf8,
             "GPU-preferred session did not report a fallback reason");
-    anom_session_destroy(session);
+    anom_direct_release(&direct);
 
     options.fallback = ANOM_FALLBACK_NONE;
-    session = reinterpret_cast<anom_session_t*>(1);
-    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+    require(anom_direct_load(packageUtf8.c_str(), &options, &direct) ==
                 ANOM_STATUS_UNSUPPORTED,
             "Strict GPU request unexpectedly accepted the CPU-only ORT backend");
-    require(session == nullptr, "Rejected strict GPU create did not clear its output");
+    require(direct.internal == nullptr, "Rejected strict GPU load retained state");
 
 #if !ANOM_TEST_TENSORRT_ENABLED
     options.backend_utf8 = nullptr;
     options.device = ANOM_DEVICE_AUTO;
     options.fallback = ANOM_FALLBACK_NONE;
-    session = nullptr;
-    require(anom_session_create_v2(packageUtf8.c_str(), &options, &session) ==
+    require(anom_direct_load(packageUtf8.c_str(), &options, &direct) ==
                 ANOM_STATUS_OK,
-            "AUTO session did not select the available CPU runtime: " + lastError());
+            "AUTO Direct object did not select the available CPU runtime: " + lastError());
     execution = {};
     execution.struct_size = sizeof(execution);
-    require(anom_session_get_execution_info(session, &execution) == ANOM_STATUS_OK,
+    require(anom_direct_get_execution_info(&direct, &execution) == ANOM_STATUS_OK,
             "AUTO execution info query failed: " + lastError());
     require(std::string(execution.execution_provider_utf8) == "cpu" &&
                 execution.fallback_occurred == 1,
             "AUTO session did not report its CPU fallback");
-    anom_session_destroy(session);
+    anom_direct_release(&direct);
 #endif
+}
+
+void testCppAlgorithmFacade() {
+    const auto package =
+        std::filesystem::path(ANOM_TEST_DATA_DIR) / "direct_ort_package";
+    const std::string packageUtf8 = anom::model::pathToUtf8(package);
+    anom_algorithm_options_t options{};
+    options.struct_size = sizeof(options);
+    options.device = ANOM_DEVICE_CPU;
+    options.device_id = -1;
+    options.precision = ANOM_PRECISION_FP32;
+
+    anom::Direct direct;
+    require(direct.load(packageUtf8.c_str(), &options) == ANOM_STATUS_OK,
+            "C++ Direct facade load failed: " + lastError());
+    require(direct.loaded(), "C++ Direct facade did not retain its runtime");
+    anom::Direct moved = std::move(direct);
+    require(!direct.loaded() && moved.loaded(),
+            "C++ algorithm facade move did not transfer ownership");
 }
 
 void testModelManagementCAbi() {
@@ -258,13 +288,16 @@ void testModelManagementCAbi() {
             "Committed package could not be opened: " + lastError());
     anom_model_destroy(model);
 
-    anom_fitter_options_t fitterOptions{};
-    fitterOptions.struct_size = sizeof(fitterOptions);
-    fitterOptions.template_package_utf8 = packageUtf8.c_str();
-    anom_fitter_t* fitter = reinterpret_cast<anom_fitter_t*>(1);
-    require(anom_fitter_create(&fitterOptions, &fitter) == ANOM_STATUS_UNSUPPORTED,
-            "Direct model unexpectedly accepted artifact fitting");
-    require(fitter == nullptr, "Rejected fitter create did not clear output");
+    anom_patchcore_fitter_options_t wrongOptions{};
+    wrongOptions.struct_size = sizeof(wrongOptions);
+    wrongOptions.template_package_utf8 = packageUtf8.c_str();
+    anom_patchcore_fitter_t wrongFitter{};
+    wrongFitter.struct_size = sizeof(wrongFitter);
+    require(anom_patchcore_fitter_create(&wrongOptions, &wrongFitter) ==
+                ANOM_STATUS_ALGORITHM_MISMATCH,
+            "PatchCore fitter accepted a Direct model template");
+    require(wrongFitter.internal == nullptr,
+            "Rejected PatchCore fitter retained state");
 }
 
 void testPatchCoreFitterCAbi() {
@@ -312,14 +345,15 @@ void testPatchCoreFitterCAbi() {
     manifest.close();
 
     const std::string templateUtf8 = anom::model::pathToUtf8(templatePackage);
-    anom_fitter_options_t options{};
+    anom_patchcore_fitter_options_t options{};
     options.struct_size = sizeof(options);
     options.template_package_utf8 = templateUtf8.c_str();
-    options.patchcore_coreset_sampling_ratio = 0.5F;
-    options.patchcore_projection_dimension = 3;
+    options.coreset_sampling_ratio = 0.5F;
+    options.projection_dimension = 3;
     options.random_seed = 7;
-    anom_fitter_t* fitter = nullptr;
-    require(anom_fitter_create(&options, &fitter) == ANOM_STATUS_OK,
+    anom_patchcore_fitter_t fitter{};
+    fitter.struct_size = sizeof(fitter);
+    require(anom_patchcore_fitter_create(&options, &fitter) == ANOM_STATUS_OK,
             "PatchCore fitter create failed: " + lastError());
 
     const std::uint8_t pixels[24] = {
@@ -334,21 +368,23 @@ void testPatchCoreFitterCAbi() {
         images[index].stride_bytes = 6;
         images[index].pixel_format = ANOM_PIXEL_FORMAT_RGB8;
     }
-    require(anom_fitter_add_batch(fitter, images, 2) == ANOM_STATUS_OK,
+    require(anom_patchcore_fitter_add_batch(&fitter, images, 2) == ANOM_STATUS_OK,
             "PatchCore fitter add batch failed: " + lastError());
     anom_fit_progress_t progress{};
     progress.struct_size = sizeof(progress);
-    require(anom_fitter_get_progress(fitter, &progress) == ANOM_STATUS_OK,
+    require(anom_patchcore_fitter_get_progress(&fitter, &progress) == ANOM_STATUS_OK,
             "PatchCore fitter progress failed: " + lastError());
     require(progress.processed_samples == 2 && progress.collected_items == 8,
             "PatchCore fitter reported incorrect progress");
     const std::string checkpointUtf8 = anom::model::pathToUtf8(checkpoint);
-    require(anom_fitter_save_checkpoint(fitter, checkpointUtf8.c_str()) == ANOM_STATUS_OK,
+    require(anom_patchcore_fitter_save_checkpoint(&fitter, checkpointUtf8.c_str()) ==
+                ANOM_STATUS_OK,
             "PatchCore checkpoint save failed: " + lastError());
     const std::string outputUtf8 = anom::model::pathToUtf8(outputPackage);
-    require(anom_fitter_finalize(fitter, outputUtf8.c_str()) == ANOM_STATUS_OK,
+    require(anom_patchcore_fitter_finalize(&fitter, outputUtf8.c_str()) == ANOM_STATUS_OK,
             "PatchCore fitter finalize failed: " + lastError());
-    anom_fitter_destroy(fitter);
+    anom_patchcore_fitter_release(&fitter);
+    require(fitter.internal == nullptr, "PatchCore fitter release retained state");
 
     require(std::filesystem::is_regular_file(outputPackage / "memory.faiss"),
             "PatchCore fitter did not produce a memory bank");
@@ -364,11 +400,12 @@ void testPatchCoreFitterCAbi() {
 }
 
 void testInvalidArguments() {
-    anom_session_t* session = reinterpret_cast<anom_session_t*>(1);
-    const anom_status_t status = anom_session_create(nullptr, nullptr, &session);
+    anom_direct_t direct{};
+    direct.struct_size = sizeof(direct);
+    const anom_status_t status = anom_direct_load(nullptr, nullptr, &direct);
     require(status == ANOM_STATUS_INVALID_ARGUMENT,
             "C API did not reject a null model package");
-    require(session == nullptr, "C API did not clear output for an invalid call");
+    require(direct.internal == nullptr, "C API retained state for an invalid call");
     require(!lastError().empty(), "C API did not report an error message");
 }
 
@@ -378,6 +415,7 @@ int main() {
     try {
         testPublicCAbi();
         testExecutionSelectionCAbi();
+        testCppAlgorithmFacade();
         testModelManagementCAbi();
         testPatchCoreFitterCAbi();
         testInvalidArguments();

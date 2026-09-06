@@ -1,3 +1,4 @@
+#define ANOM_ENGINE_ENABLE_LEGACY_SESSION_API 1
 #include "anomEngine/anomEngine.h"
 
 #ifndef ANOM_ENGINE_HAS_PATCHCORE
@@ -1165,6 +1166,172 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_finalize(
 extern "C" ANOM_ENGINE_API void anom_fitter_destroy(anom_fitter_t* fitter) {
     delete fitter;
 }
+
+namespace {
+
+template <typename Fitter>
+anom_fitter_t* typedFitter(Fitter* fitter, const char* name) {
+    if (!fitter || fitter->struct_size < sizeof(Fitter) || !fitter->internal) {
+        fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " fitter is not initialized");
+        return nullptr;
+    }
+    return static_cast<anom_fitter_t*>(fitter->internal);
+}
+
+template <typename Fitter>
+const anom_fitter_t* typedFitter(const Fitter* fitter, const char* name) {
+    if (!fitter || fitter->struct_size < sizeof(Fitter) || !fitter->internal) {
+        fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " fitter is not initialized");
+        return nullptr;
+    }
+    return static_cast<const anom_fitter_t*>(fitter->internal);
+}
+
+template <typename Fitter>
+anom_status_t attachTypedFitter(Fitter* destination,
+                                anom_fitter_t* implementation,
+                                anom_fitter::Kind expected,
+                                const char* name) {
+    if (implementation->kind != expected) {
+        anom_fitter_destroy(implementation);
+        return fail(ANOM_STATUS_INVALID_MODEL_PACKAGE,
+                    std::string(name) + " fitter requires a matching model template");
+    }
+    destination->internal = implementation;
+    return ANOM_STATUS_OK;
+}
+
+anom_status_t validateFitterTemplate(const char* templatePackage,
+                                     AlgorithmType expected,
+                                     const char* name) {
+    if (!templatePackage || !*templatePackage) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    std::string(name) + " fitter template path is empty");
+    }
+    try {
+        auto inspected = ModelPackage::load(pathFromUtf8(templatePackage));
+        if (!inspected) return fail(inspected.status());
+        if (inspected.value().manifest().algorithm != expected) {
+            return fail(ANOM_STATUS_ALGORITHM_MISMATCH,
+                        std::string(name) + " fitter cannot use a " +
+                            toString(inspected.value().manifest().algorithm) +
+                            " model template");
+        }
+        return ANOM_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY,
+                    std::string("Out of memory while inspecting ") + name +
+                        " fitter template");
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INVALID_MODEL_PACKAGE, error.what());
+    }
+}
+
+}  // namespace
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_patchcore_fitter_create(
+    const anom_patchcore_fitter_options_t* options,
+    anom_patchcore_fitter_t* fitter) {
+    anomLastError.clear();
+    if (!fitter || fitter->struct_size < sizeof(*fitter) || fitter->internal ||
+        !options || options->struct_size < sizeof(*options)) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    "PatchCore fitter object or options are invalid");
+    }
+    const auto validated = validateFitterTemplate(
+        options->template_package_utf8, AlgorithmType::PatchCore, "PatchCore");
+    if (validated != ANOM_STATUS_OK) return validated;
+    anom_fitter_options_t converted{};
+    converted.struct_size = sizeof(converted);
+    converted.template_package_utf8 = options->template_package_utf8;
+    converted.plugin_directory_utf8 = options->plugin_directory_utf8;
+    converted.patchcore_coreset_sampling_ratio = options->coreset_sampling_ratio;
+    converted.patchcore_projection_dimension = options->projection_dimension;
+    converted.patchcore_max_exact_distance_evaluations =
+        options->max_exact_distance_evaluations;
+    converted.random_seed = options->random_seed;
+    anom_fitter_t* implementation = nullptr;
+    const auto created = anom_fitter_create(&converted, &implementation);
+    if (created != ANOM_STATUS_OK) return created;
+    return attachTypedFitter(fitter, implementation, anom_fitter::Kind::PatchCore,
+                             "PatchCore");
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t anom_padim_fitter_create(
+    const anom_padim_fitter_options_t* options,
+    anom_padim_fitter_t* fitter) {
+    anomLastError.clear();
+    if (!fitter || fitter->struct_size < sizeof(*fitter) || fitter->internal ||
+        !options || options->struct_size < sizeof(*options)) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    "PaDiM fitter object or options are invalid");
+    }
+    const auto validated = validateFitterTemplate(
+        options->template_package_utf8, AlgorithmType::Padim, "PaDiM");
+    if (validated != ANOM_STATUS_OK) return validated;
+    anom_fitter_options_t converted{};
+    converted.struct_size = sizeof(converted);
+    converted.template_package_utf8 = options->template_package_utf8;
+    converted.plugin_directory_utf8 = options->plugin_directory_utf8;
+    converted.padim_covariance_regularization = options->covariance_regularization;
+    converted.padim_channel_indices = options->channel_indices;
+    converted.padim_channel_index_count = options->channel_index_count;
+    anom_fitter_t* implementation = nullptr;
+    const auto created = anom_fitter_create(&converted, &implementation);
+    if (created != ANOM_STATUS_OK) return created;
+    return attachTypedFitter(fitter, implementation, anom_fitter::Kind::Padim,
+                             "PaDiM");
+}
+
+#define ANOM_DEFINE_FITTER_API(name, display_name)                                      \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_add_batch(          \
+        anom_##name##_fitter_t* fitter, const anom_image_t* images, size_t imageCount) {\
+        auto* implementation = typedFitter(fitter, display_name);                       \
+        return implementation ? anom_fitter_add_batch(implementation, images, imageCount)\
+                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_get_progress(       \
+        const anom_##name##_fitter_t* fitter, anom_fit_progress_t* outProgress) {       \
+        const auto* implementation = typedFitter(fitter, display_name);                 \
+        return implementation ? anom_fitter_get_progress(implementation, outProgress)  \
+                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_save_checkpoint(    \
+        const anom_##name##_fitter_t* fitter, const char* path) {                       \
+        const auto* implementation = typedFitter(fitter, display_name);                 \
+        return implementation ? anom_fitter_save_checkpoint(implementation, path)      \
+                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_load_checkpoint(    \
+        anom_##name##_fitter_t* fitter, const char* path) {                             \
+        auto* implementation = typedFitter(fitter, display_name);                       \
+        return implementation ? anom_fitter_load_checkpoint(implementation, path)      \
+                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_cancel(             \
+        anom_##name##_fitter_t* fitter) {                                               \
+        auto* implementation = typedFitter(fitter, display_name);                       \
+        return implementation ? anom_fitter_cancel(implementation)                     \
+                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_finalize(           \
+        anom_##name##_fitter_t* fitter, const char* outputPackage) {                    \
+        auto* implementation = typedFitter(fitter, display_name);                       \
+        return implementation ? anom_fitter_finalize(implementation, outputPackage)    \
+                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API void anom_##name##_fitter_release(                     \
+        anom_##name##_fitter_t* fitter) {                                               \
+        if (!fitter) return;                                                            \
+        anom_fitter_destroy(static_cast<anom_fitter_t*>(fitter->internal));             \
+        fitter->internal = nullptr;                                                     \
+        std::memset(fitter->reserved, 0, sizeof(fitter->reserved));                     \
+    }
+
+ANOM_DEFINE_FITTER_API(patchcore, "PatchCore")
+ANOM_DEFINE_FITTER_API(padim, "PaDiM")
+
+#undef ANOM_DEFINE_FITTER_API
 
 extern "C" ANOM_ENGINE_API anom_status_t anom_calibrator_create(
     const anom_model_t* model, const anom_calibrator_options_t* options,

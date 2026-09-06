@@ -16,6 +16,9 @@ pluggable algorithms, and TensorRT/ONNX Runtime backends.
 
 - A versioned C11 ABI keeps STL, OpenCV types, exceptions, and C++ virtual
   interfaces out of the public DLL/shared-library boundary.
+- Each algorithm is a distinct public object (`anom_patchcore_t`,
+  `anom_padim_t`, `anom_yolo_t`, ...), so algorithm-specific capabilities can
+  evolve without expanding a generic session interface.
 - Algorithm plugins currently cover Direct Prediction, EfficientAD, DFKDE,
   PaDiM, PatchCore, SPADE, and YOLO-style prediction outputs.
 - Backend plugins support TensorRT on NVIDIA GPUs and ONNX Runtime on CPUs.
@@ -27,21 +30,27 @@ pluggable algorithms, and TensorRT/ONNX Runtime backends.
 
 ## Architecture
 
-Applications link only the `anomEngine` core library and include
-[`include/anomEngine/anomEngine.h`](include/anomEngine/anomEngine.h). At runtime,
-the core reads a model package manifest and loads the requested algorithm and
-backend plugins through version-negotiated C function tables.
+Applications link only the `anomEngine` core library and create the concrete
+algorithm object they intend to use. The C ABI is declared in
+[`include/anomEngine/anomEngine.h`](include/anomEngine/anomEngine.h); C++ users
+can additionally use the move-only RAII facades in
+[`include/anomEngine/algorithms.hpp`](include/anomEngine/algorithms.hpp). At
+runtime, each object validates the package algorithm and loads the required
+algorithm and backend plugins through version-negotiated C function tables.
 
 ```text
 application
-    -> anomEngine C ABI
-        -> algorithm plugin: direct | efficientad | dfkde | padim | patchcore | spade | yolo
-        -> backend plugin:   TensorRT | ONNX Runtime
+    -> Direct | EfficientAD | DFKDE | PaDiM | PatchCore | SPADE | Yolo
+        -> shared anomEngine runtime
+            -> matching algorithm plugin
+            -> backend plugin: TensorRT | ONNX Runtime
 ```
 
 See [`src/model/README.md`](src/model/README.md) for the SDK contract, model
 package format, runtime behavior, and a complete C API example. The formal
 manifest schema and examples live in [`src/model`](src/model).
+The concrete algorithm-object API and legacy migration policy are documented in
+[`docs/algorithm-object-api.md`](docs/algorithm-object-api.md).
 The model validation, atomic package assembly, capability discovery, and
 PatchCore/PaDiM fitting APIs are documented in
 [`docs/cabi-model-lifecycle.md`](docs/cabi-model-lifecycle.md).

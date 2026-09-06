@@ -12,6 +12,7 @@
 ## 主要特性
 
 - 带版本管理的 C11 ABI，确保 STL、OpenCV 类型、异常和 C++ 虚接口不跨越公共 DLL / 共享库边界。
+- 每种算法都是独立的公共对象（`anom_patchcore_t`、`anom_padim_t`、`anom_yolo_t` 等），算法专属能力无需扩充统一会话接口即可独立演进。
 - 算法插件目前支持 Direct Prediction、EfficientAD、DFKDE、PaDiM、PatchCore、SPADE，以及 YOLO 风格的预测输出。
 - 后端插件支持 NVIDIA GPU 上的 TensorRT 和 CPU 上的 ONNX Runtime。
 - 通过模型包清单声明张量绑定、预处理、后处理、运行时设置，以及可选的模型资源 SHA-256 校验和。
@@ -20,18 +21,22 @@
 
 ## 架构
 
-应用程序只需链接 `anomEngine` 核心库，并包含
-[`include/anomEngine/anomEngine.h`](include/anomEngine/anomEngine.h)。运行时，核心库读取模型包清单，通过支持版本协商的 C 函数表加载指定的算法插件和后端插件。
+应用程序只需链接 `anomEngine` 核心库，并创建准备使用的具体算法对象。纯 C ABI 位于
+[`include/anomEngine/anomEngine.h`](include/anomEngine/anomEngine.h)，C++ 用户还可以使用
+[`include/anomEngine/algorithms.hpp`](include/anomEngine/algorithms.hpp) 中支持移动语义和 RAII 的结构体封装。运行时，每个对象会校验模型包的算法类型，再通过支持版本协商的 C 函数表加载对应算法插件和后端插件。
 
 ```text
 应用程序
-    -> anomEngine C ABI
-        -> 算法插件：direct | efficientad | dfkde | padim | patchcore | spade | yolo
-        -> 后端插件：TensorRT | ONNX Runtime
+    -> Direct | EfficientAD | DFKDE | PaDiM | PatchCore | SPADE | Yolo
+        -> anomEngine 共享运行时
+            -> 对应的算法插件
+            -> 后端插件：TensorRT | ONNX Runtime
 ```
 
 有关 SDK 接口约定、模型包格式、运行时行为和完整的 C API 示例，请参阅
 [`src/model/README.md`](src/model/README.md)。正式的清单 schema 和示例位于 [`src/model`](src/model)。
+具体算法对象 API 与旧接口迁移策略见
+[`docs/algorithm-object-api.md`](docs/algorithm-object-api.md)。
 模型验证、原子化模型包组装、能力发现，以及 PatchCore / PaDiM 拟合 API 的说明见
 [`docs/cabi-model-lifecycle.md`](docs/cabi-model-lifecycle.md)。
 

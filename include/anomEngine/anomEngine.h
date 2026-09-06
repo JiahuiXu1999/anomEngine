@@ -20,7 +20,7 @@
 extern "C" {
 #endif
 
-#define ANOM_ENGINE_ABI_VERSION 1u
+#define ANOM_ENGINE_ABI_VERSION 2u
 
 typedef int32_t anom_status_t;
 enum {
@@ -35,6 +35,7 @@ enum {
     ANOM_STATUS_INFERENCE_FAILED = 8,
     ANOM_STATUS_OUT_OF_MEMORY = 9,
     ANOM_STATUS_CANCELLED = 10,
+    ANOM_STATUS_ALGORITHM_MISMATCH = 11,
     ANOM_STATUS_INTERNAL_ERROR = 100
 };
 
@@ -47,11 +48,31 @@ enum {
     ANOM_PIXEL_FORMAT_RGBA8 = 5
 };
 
-typedef struct anom_session anom_session_t;
 typedef struct anom_model anom_model_t;
 typedef struct anom_package_builder anom_package_builder_t;
-typedef struct anom_fitter anom_fitter_t;
 typedef struct anom_calibrator anom_calibrator_t;
+
+/*
+ * Algorithms are first-class, caller-owned objects. Zero-initialize an object,
+ * set struct_size, and load a model package through the matching algorithm API.
+ * Objects are not copyable; release them before their storage goes out of scope.
+ */
+#define ANOM_DECLARE_ALGORITHM_OBJECT(name) \
+    typedef struct anom_##name {            \
+        uint32_t struct_size;               \
+        void* internal;                     \
+        uint32_t reserved[8];               \
+    } anom_##name##_t
+
+ANOM_DECLARE_ALGORITHM_OBJECT(direct);
+ANOM_DECLARE_ALGORITHM_OBJECT(efficientad);
+ANOM_DECLARE_ALGORITHM_OBJECT(dfkde);
+ANOM_DECLARE_ALGORITHM_OBJECT(padim);
+ANOM_DECLARE_ALGORITHM_OBJECT(patchcore);
+ANOM_DECLARE_ALGORITHM_OBJECT(spade);
+ANOM_DECLARE_ALGORITHM_OBJECT(yolo);
+
+#undef ANOM_DECLARE_ALGORITHM_OBJECT
 
 typedef uint64_t anom_algorithm_capabilities_t;
 #define ANOM_ALGORITHM_CAP_PACKAGE_IMPORT  (UINT64_C(1) << 0)
@@ -68,13 +89,6 @@ typedef struct anom_algorithm_info {
     int32_t available;
     uint32_t reserved[8];
 } anom_algorithm_info_t;
-
-typedef struct anom_session_options {
-    uint32_t struct_size;
-    const char* plugin_directory_utf8;
-    int32_t warmup;
-    uint32_t reserved[8];
-} anom_session_options_t;
 
 typedef int32_t anom_device_preference_t;
 enum {
@@ -97,11 +111,11 @@ enum {
 };
 
 /*
- * Session options with explicit execution-device selection. AUTO tries
- * TensorRT/CUDA, then ONNX Runtime/CPU. A non-empty
- * backend_utf8 constrains selection to "tensorrt" or "onnxruntime".
+ * Options shared by the algorithm objects. AUTO tries TensorRT/CUDA, then
+ * ONNX Runtime/CPU. A non-empty backend_utf8 constrains selection to
+ * "tensorrt" or "onnxruntime".
  */
-typedef struct anom_session_options_v2 {
+typedef struct anom_algorithm_options {
     uint32_t struct_size;
     const char* plugin_directory_utf8;
     int32_t warmup;
@@ -111,7 +125,7 @@ typedef struct anom_session_options_v2 {
     anom_precision_t precision;
     const char* backend_utf8;
     uint32_t reserved[8];
-} anom_session_options_v2_t;
+} anom_algorithm_options_t;
 
 typedef struct anom_image {
     uint32_t struct_size;
@@ -222,22 +236,38 @@ typedef struct anom_package_builder_options {
     uint32_t reserved[8];
 } anom_package_builder_options_t;
 
-typedef struct anom_fitter_options {
+typedef struct anom_patchcore_fitter {
+    uint32_t struct_size;
+    void* internal;
+    uint32_t reserved[8];
+} anom_patchcore_fitter_t;
+
+typedef struct anom_padim_fitter {
+    uint32_t struct_size;
+    void* internal;
+    uint32_t reserved[8];
+} anom_padim_fitter_t;
+
+typedef struct anom_patchcore_fitter_options {
     uint32_t struct_size;
     const char* template_package_utf8;
     const char* plugin_directory_utf8;
-
-    float patchcore_coreset_sampling_ratio;
-    size_t patchcore_projection_dimension;
-    uint64_t patchcore_max_exact_distance_evaluations;
+    float coreset_sampling_ratio;
+    size_t projection_dimension;
+    uint64_t max_exact_distance_evaluations;
     uint32_t random_seed;
-
-    double padim_covariance_regularization;
-    const int32_t* padim_channel_indices;
-    size_t padim_channel_index_count;
-
     uint32_t reserved[8];
-} anom_fitter_options_t;
+} anom_patchcore_fitter_options_t;
+
+typedef struct anom_padim_fitter_options {
+    uint32_t struct_size;
+    const char* template_package_utf8;
+    const char* plugin_directory_utf8;
+    double covariance_regularization;
+    const int32_t* channel_indices;
+    size_t channel_index_count;
+    uint32_t reserved[8];
+} anom_padim_fitter_options_t;
 
 typedef int32_t anom_fit_stage_t;
 enum {
@@ -280,8 +310,8 @@ typedef struct anom_calibration_result {
 } anom_calibration_result_t;
 
 /*
- * Model-info string pointers remain valid until the session or model handle
- * that produced them is destroyed.
+ * Model-info string pointers remain valid until the algorithm object or model
+ * handle that produced them is released.
  */
 
 ANOM_ENGINE_API uint32_t anom_get_abi_version(void);
@@ -327,34 +357,30 @@ ANOM_ENGINE_API anom_status_t anom_package_builder_apply_calibration(
 ANOM_ENGINE_API void anom_package_builder_destroy(
     anom_package_builder_t* builder);
 
-ANOM_ENGINE_API anom_status_t anom_fitter_create(
-    const anom_fitter_options_t* options,
-    anom_fitter_t** out_fitter);
+#define ANOM_DECLARE_FITTER_API(name)                                             \
+    ANOM_ENGINE_API anom_status_t anom_##name##_fitter_create(                   \
+        const anom_##name##_fitter_options_t* options,                           \
+        anom_##name##_fitter_t* fitter);                                         \
+    ANOM_ENGINE_API anom_status_t anom_##name##_fitter_add_batch(                \
+        anom_##name##_fitter_t* fitter, const anom_image_t* images,              \
+        size_t image_count);                                                     \
+    ANOM_ENGINE_API anom_status_t anom_##name##_fitter_get_progress(             \
+        const anom_##name##_fitter_t* fitter, anom_fit_progress_t* out_progress);\
+    ANOM_ENGINE_API anom_status_t anom_##name##_fitter_save_checkpoint(          \
+        const anom_##name##_fitter_t* fitter, const char* checkpoint_path_utf8); \
+    ANOM_ENGINE_API anom_status_t anom_##name##_fitter_load_checkpoint(          \
+        anom_##name##_fitter_t* fitter, const char* checkpoint_path_utf8);       \
+    ANOM_ENGINE_API anom_status_t anom_##name##_fitter_cancel(                   \
+        anom_##name##_fitter_t* fitter);                                         \
+    ANOM_ENGINE_API anom_status_t anom_##name##_fitter_finalize(                 \
+        anom_##name##_fitter_t* fitter, const char* output_package_utf8);        \
+    ANOM_ENGINE_API void anom_##name##_fitter_release(                           \
+        anom_##name##_fitter_t* fitter)
 
-ANOM_ENGINE_API anom_status_t anom_fitter_add_batch(
-    anom_fitter_t* fitter,
-    const anom_image_t* images,
-    size_t image_count);
+ANOM_DECLARE_FITTER_API(patchcore);
+ANOM_DECLARE_FITTER_API(padim);
 
-ANOM_ENGINE_API anom_status_t anom_fitter_get_progress(
-    const anom_fitter_t* fitter,
-    anom_fit_progress_t* out_progress);
-
-ANOM_ENGINE_API anom_status_t anom_fitter_save_checkpoint(
-    const anom_fitter_t* fitter,
-    const char* checkpoint_path_utf8);
-
-ANOM_ENGINE_API anom_status_t anom_fitter_load_checkpoint(
-    anom_fitter_t* fitter,
-    const char* checkpoint_path_utf8);
-
-ANOM_ENGINE_API anom_status_t anom_fitter_cancel(anom_fitter_t* fitter);
-
-ANOM_ENGINE_API anom_status_t anom_fitter_finalize(
-    anom_fitter_t* fitter,
-    const char* output_package_utf8);
-
-ANOM_ENGINE_API void anom_fitter_destroy(anom_fitter_t* fitter);
+#undef ANOM_DECLARE_FITTER_API
 
 ANOM_ENGINE_API anom_status_t anom_calibrator_create(
     const anom_model_t* model,
@@ -373,38 +399,100 @@ ANOM_ENGINE_API anom_status_t anom_calibrator_compute(
 
 ANOM_ENGINE_API void anom_calibrator_destroy(anom_calibrator_t* calibrator);
 
+#define ANOM_DECLARE_ALGORITHM_API(name)                                         \
+    ANOM_ENGINE_API anom_status_t anom_##name##_load(                           \
+        const char* model_package_utf8, const anom_algorithm_options_t* options,\
+        anom_##name##_t* algorithm);                                            \
+    ANOM_ENGINE_API void anom_##name##_release(anom_##name##_t* algorithm);     \
+    ANOM_ENGINE_API anom_status_t anom_##name##_warmup(                         \
+        anom_##name##_t* algorithm);                                            \
+    ANOM_ENGINE_API anom_status_t anom_##name##_get_model_info(                 \
+        const anom_##name##_t* algorithm, anom_model_info_t* out_info);         \
+    ANOM_ENGINE_API anom_status_t anom_##name##_get_execution_info(             \
+        const anom_##name##_t* algorithm, anom_execution_info_t* out_info);     \
+    ANOM_ENGINE_API anom_status_t anom_##name##_predict(                        \
+        anom_##name##_t* algorithm, const anom_image_t* image,                  \
+        anom_prediction_t* out_prediction);                                     \
+    ANOM_ENGINE_API anom_status_t anom_##name##_predict_batch(                  \
+        anom_##name##_t* algorithm, const anom_image_t* images,                 \
+        size_t image_count, anom_prediction_t* out_predictions)
+
+ANOM_DECLARE_ALGORITHM_API(direct);
+ANOM_DECLARE_ALGORITHM_API(efficientad);
+ANOM_DECLARE_ALGORITHM_API(dfkde);
+ANOM_DECLARE_ALGORITHM_API(padim);
+ANOM_DECLARE_ALGORITHM_API(patchcore);
+ANOM_DECLARE_ALGORITHM_API(spade);
+ANOM_DECLARE_ALGORITHM_API(yolo);
+
+#undef ANOM_DECLARE_ALGORITHM_API
+
+/*
+ * Define ANOM_ENGINE_ENABLE_LEGACY_SESSION_API before including this header to
+ * compile source code that still uses the pre-v2 generic session/fitter API.
+ * New applications should use the algorithm-specific objects above.
+ */
+#if defined(ANOM_ENGINE_ENABLE_LEGACY_SESSION_API)
+typedef struct anom_session anom_session_t;
+typedef struct anom_fitter anom_fitter_t;
+
+typedef struct anom_session_options {
+    uint32_t struct_size;
+    const char* plugin_directory_utf8;
+    int32_t warmup;
+    uint32_t reserved[8];
+} anom_session_options_t;
+
+typedef anom_algorithm_options_t anom_session_options_v2_t;
+
+typedef struct anom_fitter_options {
+    uint32_t struct_size;
+    const char* template_package_utf8;
+    const char* plugin_directory_utf8;
+    float patchcore_coreset_sampling_ratio;
+    size_t patchcore_projection_dimension;
+    uint64_t patchcore_max_exact_distance_evaluations;
+    uint32_t random_seed;
+    double padim_covariance_regularization;
+    const int32_t* padim_channel_indices;
+    size_t padim_channel_index_count;
+    uint32_t reserved[8];
+} anom_fitter_options_t;
+
 ANOM_ENGINE_API anom_status_t anom_session_create(
-    const char* model_package_utf8,
-    const anom_session_options_t* options,
+    const char* model_package_utf8, const anom_session_options_t* options,
     anom_session_t** out_session);
-
 ANOM_ENGINE_API anom_status_t anom_session_create_v2(
-    const char* model_package_utf8,
-    const anom_session_options_v2_t* options,
+    const char* model_package_utf8, const anom_session_options_v2_t* options,
     anom_session_t** out_session);
-
 ANOM_ENGINE_API void anom_session_destroy(anom_session_t* session);
-
 ANOM_ENGINE_API anom_status_t anom_session_warmup(anom_session_t* session);
-
 ANOM_ENGINE_API anom_status_t anom_session_get_model_info(
-    const anom_session_t* session,
-    anom_model_info_t* out_info);
-
+    const anom_session_t* session, anom_model_info_t* out_info);
 ANOM_ENGINE_API anom_status_t anom_session_get_execution_info(
-    const anom_session_t* session,
-    anom_execution_info_t* out_info);
-
+    const anom_session_t* session, anom_execution_info_t* out_info);
 ANOM_ENGINE_API anom_status_t anom_session_predict(
-    anom_session_t* session,
-    const anom_image_t* image,
+    anom_session_t* session, const anom_image_t* image,
     anom_prediction_t* out_prediction);
-
 ANOM_ENGINE_API anom_status_t anom_session_predict_batch(
-    anom_session_t* session,
-    const anom_image_t* images,
-    size_t image_count,
+    anom_session_t* session, const anom_image_t* images, size_t image_count,
     anom_prediction_t* out_predictions);
+
+ANOM_ENGINE_API anom_status_t anom_fitter_create(
+    const anom_fitter_options_t* options, anom_fitter_t** out_fitter);
+ANOM_ENGINE_API anom_status_t anom_fitter_add_batch(
+    anom_fitter_t* fitter, const anom_image_t* images, size_t image_count);
+ANOM_ENGINE_API anom_status_t anom_fitter_get_progress(
+    const anom_fitter_t* fitter, anom_fit_progress_t* out_progress);
+ANOM_ENGINE_API anom_status_t anom_fitter_save_checkpoint(
+    const anom_fitter_t* fitter, const char* checkpoint_path_utf8);
+ANOM_ENGINE_API anom_status_t anom_fitter_load_checkpoint(
+    anom_fitter_t* fitter, const char* checkpoint_path_utf8);
+ANOM_ENGINE_API anom_status_t anom_fitter_cancel(anom_fitter_t* fitter);
+ANOM_ENGINE_API anom_status_t anom_fitter_finalize(
+    anom_fitter_t* fitter, const char* output_package_utf8);
+ANOM_ENGINE_API void anom_fitter_destroy(anom_fitter_t* fitter);
+#endif
 
 ANOM_ENGINE_API void anom_prediction_release(anom_prediction_t* prediction);
 

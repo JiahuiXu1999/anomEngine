@@ -1,3 +1,4 @@
+#define ANOM_ENGINE_ENABLE_LEGACY_SESSION_API 1
 #include "anomEngine/anomEngine.h"
 
 #include "infrastructure/utf8_path.h"
@@ -20,10 +21,12 @@
 #endif
 
 using anom::model::ErrorCode;
+using anom::model::AlgorithmType;
 using anom::model::DevicePreference;
 using anom::model::FallbackPolicy;
 using anom::model::InferenceSession;
 using anom::model::LoadOptions;
+using anom::model::ModelPackage;
 using anom::model::pathFromUtf8;
 using anom::model::PrecisionPreference;
 using anom::model::Prediction;
@@ -467,6 +470,132 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_predict_batch(
         return fail(ANOM_STATUS_INTERNAL_ERROR, error.what());
     }
 }
+
+namespace {
+
+template <typename Algorithm>
+anom_status_t loadAlgorithm(const char* modelPackage,
+                            const anom_algorithm_options_t* options,
+                            Algorithm* algorithm,
+                            AlgorithmType expected,
+                            const char* expectedName) {
+    anomLastError.clear();
+    if (!algorithm || algorithm->struct_size < sizeof(Algorithm)) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    std::string(expectedName) + " object struct_size is incompatible");
+    }
+    if (algorithm->internal) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    std::string(expectedName) + " object is already loaded");
+    }
+    if (!modelPackage || !*modelPackage) {
+        return fail(ANOM_STATUS_INVALID_ARGUMENT,
+                    std::string(expectedName) + " model package path is empty");
+    }
+    try {
+        auto inspected = ModelPackage::load(pathFromUtf8(modelPackage));
+        if (!inspected) return fail(inspected.status());
+        if (inspected.value().manifest().algorithm != expected) {
+            const std::string actual =
+                anom::model::toString(inspected.value().manifest().algorithm);
+            return fail(ANOM_STATUS_ALGORITHM_MISMATCH,
+                        std::string(expectedName) + " cannot load a " + actual +
+                            " model package");
+        }
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY,
+                    std::string("Out of memory while inspecting ") + expectedName +
+                        " model package");
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INVALID_MODEL_PACKAGE, error.what());
+    }
+    anom_session_t* session = nullptr;
+    const anom_status_t loaded = anom_session_create_v2(modelPackage, options, &session);
+    if (loaded != ANOM_STATUS_OK) return loaded;
+    algorithm->internal = session;
+    return ANOM_STATUS_OK;
+}
+
+template <typename Algorithm>
+void releaseAlgorithm(Algorithm* algorithm) {
+    if (!algorithm) return;
+    anom_session_destroy(static_cast<anom_session_t*>(algorithm->internal));
+    algorithm->internal = nullptr;
+    std::memset(algorithm->reserved, 0, sizeof(algorithm->reserved));
+}
+
+template <typename Algorithm>
+anom_session_t* algorithmSession(Algorithm* algorithm, const char* name) {
+    if (!algorithm || algorithm->struct_size < sizeof(Algorithm) || !algorithm->internal) {
+        fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " object is not loaded");
+        return nullptr;
+    }
+    return static_cast<anom_session_t*>(algorithm->internal);
+}
+
+template <typename Algorithm>
+const anom_session_t* algorithmSession(const Algorithm* algorithm, const char* name) {
+    if (!algorithm || algorithm->struct_size < sizeof(Algorithm) || !algorithm->internal) {
+        fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " object is not loaded");
+        return nullptr;
+    }
+    return static_cast<const anom_session_t*>(algorithm->internal);
+}
+
+}  // namespace
+
+#define ANOM_DEFINE_ALGORITHM_API(name, type, display_name)                              \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_load(                       \
+        const char* modelPackage, const anom_algorithm_options_t* options,              \
+        anom_##name##_t* algorithm) {                                                   \
+        return loadAlgorithm(modelPackage, options, algorithm, type, display_name);     \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API void anom_##name##_release(                            \
+        anom_##name##_t* algorithm) {                                                   \
+        releaseAlgorithm(algorithm);                                                    \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_warmup(                    \
+        anom_##name##_t* algorithm) {                                                   \
+        auto* session = algorithmSession(algorithm, display_name);                      \
+        return session ? anom_session_warmup(session) : ANOM_STATUS_INVALID_ARGUMENT;   \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_get_model_info(             \
+        const anom_##name##_t* algorithm, anom_model_info_t* outInfo) {                 \
+        const auto* session = algorithmSession(algorithm, display_name);                \
+        return session ? anom_session_get_model_info(session, outInfo)                  \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_get_execution_info(         \
+        const anom_##name##_t* algorithm, anom_execution_info_t* outInfo) {             \
+        const auto* session = algorithmSession(algorithm, display_name);                \
+        return session ? anom_session_get_execution_info(session, outInfo)              \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_predict(                   \
+        anom_##name##_t* algorithm, const anom_image_t* image,                         \
+        anom_prediction_t* outPrediction) {                                             \
+        auto* session = algorithmSession(algorithm, display_name);                      \
+        return session ? anom_session_predict(session, image, outPrediction)            \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
+    }                                                                                   \
+    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_predict_batch(             \
+        anom_##name##_t* algorithm, const anom_image_t* images, size_t imageCount,      \
+        anom_prediction_t* outPredictions) {                                            \
+        auto* session = algorithmSession(algorithm, display_name);                      \
+        return session ? anom_session_predict_batch(                                   \
+                             session, images, imageCount, outPredictions)               \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
+    }
+
+ANOM_DEFINE_ALGORITHM_API(direct, AlgorithmType::Direct, "Direct")
+ANOM_DEFINE_ALGORITHM_API(efficientad, AlgorithmType::EfficientAD, "EfficientAD")
+ANOM_DEFINE_ALGORITHM_API(dfkde, AlgorithmType::DFKDE, "DFKDE")
+ANOM_DEFINE_ALGORITHM_API(padim, AlgorithmType::Padim, "PaDiM")
+ANOM_DEFINE_ALGORITHM_API(patchcore, AlgorithmType::PatchCore, "PatchCore")
+ANOM_DEFINE_ALGORITHM_API(spade, AlgorithmType::SPADE, "SPADE")
+ANOM_DEFINE_ALGORITHM_API(yolo, AlgorithmType::Yolo, "YOLO")
+
+#undef ANOM_DEFINE_ALGORITHM_API
 
 extern "C" ANOM_ENGINE_API void anom_prediction_release(anom_prediction_t* prediction) {
     if (!prediction) return;

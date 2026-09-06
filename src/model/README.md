@@ -9,13 +9,14 @@ the SDK ABI.
 
 ```text
 include/anomEngine/anomEngine.h
+include/anomEngine/algorithms.hpp
 lib/anomEngine.lib
 bin/anomEngine.dll
 bin/anom_algo_<algorithm>.dll
 bin/anom_backend_<backend>.dll
 ```
 
-By default plugins are resolved next to `anomEngine.dll`. `anom_session_options_t::plugin_directory_utf8` can
+By default plugins are resolved next to `anomEngine.dll`. `anom_algorithm_options_t::plugin_directory_utf8` can
 select a different explicit directory. Plugins are loaded with a fixed, version-negotiated C function table;
 STL, OpenCV types, exceptions, and C++ virtual interfaces never cross a DLL boundary. Memory returned by the
 public API is released with `anom_prediction_release`.
@@ -24,25 +25,31 @@ public API is released with `anom_prediction_release`.
 
 | Directory | Responsibility |
 |---|---|
-| `src/model` | Public session API, manifest/package contract, status and tensor/result types |
+| `src/model` | Shared runtime implementation, manifest/package contract, status and tensor/result types |
 | `src/backends` | Runtime abstraction, factory, TensorRT and ONNX Runtime implementations |
 | `src/adapters` | PatchCore, PaDiM and direct-prediction algorithm adapters |
 | `src/pipeline` | Training-side PatchCore memory-bank and PaDiM statistics pipelines |
 | `src/processing` | Image preprocessing and anomaly-result postprocessing |
 | `src/infrastructure` | Internal JSON parser and SHA-256 artifact verification |
 
-Internal C++ tests may include `model/inference_session.h`, but SDK consumers should include only
-`anomEngine/anomEngine.h`.
+Internal C++ tests may include `model/inference_session.h`, but SDK consumers
+should include only `anomEngine/anomEngine.h` or `anomEngine/algorithms.hpp`.
 
-## Public entry point
+## Algorithm-specific entry points
+
+The public API has no generic inference session. A caller chooses a concrete
+algorithm object, and loading fails if the model package declares a different
+algorithm. Shared image, prediction, execution, and error types remain common.
 
 ```c
 #include <anomEngine/anomEngine.h>
 
-anom_session_t* session = NULL;
-anom_session_options_t options = {0};
+anom_padim_t padim = {0};
+padim.struct_size = sizeof(padim);
+
+anom_algorithm_options_t options = {0};
 options.struct_size = sizeof(options);
-if (anom_session_create("models/bottle-padim/1.0.0", &options, &session) != ANOM_STATUS_OK) {
+if (anom_padim_load("models/bottle-padim/1.0.0", &options, &padim) != ANOM_STATUS_OK) {
     return 1;
 }
 
@@ -56,42 +63,47 @@ image.pixel_format = ANOM_PIXEL_FORMAT_BGR8;
 
 anom_prediction_t prediction = {0};
 prediction.struct_size = sizeof(prediction);
-if (anom_session_predict(session, &image, &prediction) == ANOM_STATUS_OK) {
+if (anom_padim_predict(&padim, &image, &prediction) == ANOM_STATUS_OK) {
     /* consume prediction.score, prediction.mask, prediction.regions, ... */
     anom_prediction_release(&prediction);
 }
-anom_session_destroy(session);
+anom_padim_release(&padim);
 ```
+
+C++ applications may include `anomEngine/algorithms.hpp` and use the equivalent
+move-only facade: `anom::PaDiM padim; padim.load(...); padim.predict(...);`.
 
 ### CPU/GPU selection
 
-`anom_session_create` preserves the v1 behavior and uses the runtime declared by the manifest. New applications
-can use `anom_session_create_v2` to express a device preference without depending on backend-specific APIs:
+Every algorithm accepts the same execution options without sharing an
+algorithm interface:
 
 ```c
-anom_session_options_v2_t options = {0};
+anom_algorithm_options_t options = {0};
 options.struct_size = sizeof(options);
 options.device = ANOM_DEVICE_GPU;
 options.device_id = -1;
 options.fallback = ANOM_FALLBACK_LOAD_ONLY;
 options.precision = ANOM_PRECISION_AUTO;
 
-anom_session_t* session = NULL;
-if (anom_session_create_v2(model_path, &options, &session) != ANOM_STATUS_OK) {
+anom_patchcore_t patchcore = {0};
+patchcore.struct_size = sizeof(patchcore);
+if (anom_patchcore_load(model_path, &options, &patchcore) != ANOM_STATUS_OK) {
     return 1;
 }
 
 anom_execution_info_t execution = {0};
 execution.struct_size = sizeof(execution);
-anom_session_get_execution_info(session, &execution);
+anom_patchcore_get_execution_info(&patchcore, &execution);
 /* execution.backend_utf8, execution.execution_provider_utf8 and
    execution.fallback_reason_utf8 describe the actual runtime. */
+anom_patchcore_release(&patchcore);
 ```
 
 `ANOM_DEVICE_CPU` selects ONNX Runtime CPU. `ANOM_DEVICE_GPU` selects TensorRT;
 `ANOM_FALLBACK_LOAD_ONLY` additionally permits ONNX Runtime CPU when GPU initialization fails. `ANOM_DEVICE_AUTO`
 tries TensorRT/CUDA and then ONNX Runtime/CPU. A non-empty `backend_utf8` constrains
-selection to `tensorrt` or `onnxruntime`. Fallback only occurs while creating or warming the session; prediction
+selection to `tensorrt` or `onnxruntime`. Fallback only occurs while loading or warming the algorithm object; prediction
 failures are never silently retried on a different device.
 
 The package root must contain `manifest.json`. All artifact paths are relative to this root and are rejected if
