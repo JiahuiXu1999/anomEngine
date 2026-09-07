@@ -30,13 +30,16 @@ pluggable algorithms, and TensorRT/ONNX Runtime backends.
 
 ## Architecture
 
-Applications link only the `anomEngine` core library and create the concrete
-algorithm object they intend to use. The C ABI is declared in
-[`include/anomEngine/anomEngine.h`](include/anomEngine/anomEngine.h); C++ users
-can additionally use the move-only RAII facades in
-[`include/anomEngine/algorithms.hpp`](include/anomEngine/algorithms.hpp). At
-runtime, each object validates the package algorithm and loads the required
-algorithm and backend plugins through version-negotiated C function tables.
+Applications link only the `anomEngine` core library and create a concrete
+C ABI algorithm structure. Include an individual public header such as
+[`include/anomEngine/patchcore.h`](include/anomEngine/patchcore.h), or the
+[`anomEngine.h`](include/anomEngine/anomEngine.h) umbrella. Set `struct_size`,
+call `anom_patchcore_init(&object)`, then use methods such as
+`object.load(&object, path, &options)` and
+`object.predict(&object, &image, &prediction)`. ABI v3 requires rebuilding v2
+clients. C and C++ use the same C structures directly. At runtime, each object validates
+the package algorithm and loads the required algorithm and backend plugins
+through version-negotiated C function tables.
 
 ```text
 application

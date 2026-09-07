@@ -21,9 +21,15 @@
 
 ## 架构
 
-应用程序只需链接 `anomEngine` 核心库，并创建准备使用的具体算法对象。纯 C ABI 位于
-[`include/anomEngine/anomEngine.h`](include/anomEngine/anomEngine.h)，C++ 用户还可以使用
-[`include/anomEngine/algorithms.hpp`](include/anomEngine/algorithms.hpp) 中支持移动语义和 RAII 的结构体封装。运行时，每个对象会校验模型包的算法类型，再通过支持版本协商的 C 函数表加载对应算法插件和后端插件。
+应用程序只需链接 `anomEngine` 核心库，并直接创建带函数指针成员的 C ABI 算法结构体。
+按需包含独立头文件，例如 [`patchcore.h`](include/anomEngine/patchcore.h)，
+或通过 [`anomEngine.h`](include/anomEngine/anomEngine.h) 包含全部算法。
+设置 `struct_size` 后，调用 `anom_patchcore_init(&object)` 初始化函数表，
+再通过 `object.load(&object, path, &options)`、
+`object.predict(&object, &image, &prediction)` 完成检测链路。
+公共 ABI 已升至 v3，旧 v2 客户端需要重新编译并部署配套核心库。
+C 和 C++ 用户统一直接使用这些 C ABI 结构体。
+运行时，每个对象会校验模型包的算法类型，再通过支持版本协商的 C 函数表加载对应算法插件和后端插件。
 
 ```text
 应用程序

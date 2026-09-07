@@ -9,7 +9,8 @@ the SDK ABI.
 
 ```text
 include/anomEngine/anomEngine.h
-include/anomEngine/algorithms.hpp
+include/anomEngine/common.h
+include/anomEngine/patchcore.h (and one .h per algorithm)
 lib/anomEngine.lib
 bin/anomEngine.dll
 bin/anom_algo_<algorithm>.dll
@@ -33,7 +34,9 @@ public API is released with `anom_prediction_release`.
 | `src/infrastructure` | Internal JSON parser and SHA-256 artifact verification |
 
 Internal C++ tests may include `model/inference_session.h`, but SDK consumers
-should include only `anomEngine/anomEngine.h` or `anomEngine/algorithms.hpp`.
+should include an algorithm header such as `anomEngine/patchcore.h`, or the
+`anomEngine/anomEngine.h` umbrella. See `docs/algorithm-object-api.md` for ABI v3
+object initialization and migration requirements.
 
 ## Algorithm-specific entry points
 
@@ -46,10 +49,11 @@ algorithm. Shared image, prediction, execution, and error types remain common.
 
 anom_padim_t padim = {0};
 padim.struct_size = sizeof(padim);
+if (anom_padim_init(&padim) != ANOM_STATUS_OK) return 1;
 
 anom_algorithm_options_t options = {0};
 options.struct_size = sizeof(options);
-if (anom_padim_load("models/bottle-padim/1.0.0", &options, &padim) != ANOM_STATUS_OK) {
+if (padim.load(&padim, "models/bottle-padim/1.0.0", &options) != ANOM_STATUS_OK) {
     return 1;
 }
 
@@ -63,15 +67,15 @@ image.pixel_format = ANOM_PIXEL_FORMAT_BGR8;
 
 anom_prediction_t prediction = {0};
 prediction.struct_size = sizeof(prediction);
-if (anom_padim_predict(&padim, &image, &prediction) == ANOM_STATUS_OK) {
+if (padim.predict(&padim, &image, &prediction) == ANOM_STATUS_OK) {
     /* consume prediction.score, prediction.mask, prediction.regions, ... */
     anom_prediction_release(&prediction);
 }
-anom_padim_release(&padim);
+padim.release(&padim);
 ```
 
-C++ applications may include `anomEngine/algorithms.hpp` and use the equivalent
-move-only facade: `anom::PaDiM padim; padim.load(...); padim.predict(...);`.
+C++ applications use the same C structures, member calls and explicit release
+shown above. No separate wrapper header is needed.
 
 ### CPU/GPU selection
 
@@ -88,16 +92,17 @@ options.precision = ANOM_PRECISION_AUTO;
 
 anom_patchcore_t patchcore = {0};
 patchcore.struct_size = sizeof(patchcore);
-if (anom_patchcore_load(model_path, &options, &patchcore) != ANOM_STATUS_OK) {
+if (anom_patchcore_init(&patchcore) != ANOM_STATUS_OK ||
+    patchcore.load(&patchcore, model_path, &options) != ANOM_STATUS_OK) {
     return 1;
 }
 
 anom_execution_info_t execution = {0};
 execution.struct_size = sizeof(execution);
-anom_patchcore_get_execution_info(&patchcore, &execution);
+patchcore.get_execution_info(&patchcore, &execution);
 /* execution.backend_utf8, execution.execution_provider_utf8 and
    execution.fallback_reason_utf8 describe the actual runtime. */
-anom_patchcore_release(&patchcore);
+patchcore.release(&patchcore);
 ```
 
 `ANOM_DEVICE_CPU` selects ONNX Runtime CPU. `ANOM_DEVICE_GPU` selects TensorRT;

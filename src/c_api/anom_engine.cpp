@@ -1,6 +1,8 @@
 #define ANOM_ENGINE_ENABLE_LEGACY_SESSION_API 1
 #include "anomEngine/anomEngine.h"
 
+#include "c_api/algorithm_object_impl.h"
+
 #include "infrastructure/utf8_path.h"
 
 #include "model/inference_session.h"
@@ -277,15 +279,15 @@ anom_precision_t publicPrecision(PrecisionPreference value) noexcept {
 
 }  // namespace
 
-extern "C" ANOM_ENGINE_API uint32_t anom_get_abi_version(void) {
+extern "C" ANOM_ENGINE_API uint32_t ANOM_CALL anom_get_abi_version(void) {
     return ANOM_ENGINE_ABI_VERSION;
 }
 
-extern "C" ANOM_ENGINE_API const char* anom_get_version_string(void) {
+extern "C" ANOM_ENGINE_API const char* ANOM_CALL anom_get_version_string(void) {
     return ANOM_ENGINE_VERSION_STRING;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_session_create(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_create(
     const char* modelPackage, const anom_session_options_t* options,
     anom_session_t** outSession) {
     anomLastError.clear();
@@ -304,7 +306,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_create(
     return createSession(modelPackage, std::move(converted), outSession);
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_session_create_v2(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_create_v2(
     const char* modelPackage, const anom_session_options_v2_t* options,
     anom_session_t** outSession) {
     anomLastError.clear();
@@ -360,11 +362,11 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_create_v2(
     return createSession(modelPackage, std::move(converted), outSession);
 }
 
-extern "C" ANOM_ENGINE_API void anom_session_destroy(anom_session_t* session) {
+extern "C" ANOM_ENGINE_API void ANOM_CALL anom_session_destroy(anom_session_t* session) {
     delete session;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_session_warmup(anom_session_t* session) {
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_warmup(anom_session_t* session) {
     anomLastError.clear();
     if (!session) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Session is null");
     try {
@@ -375,7 +377,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_warmup(anom_session_t* ses
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_model_info(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_get_model_info(
     const anom_session_t* session, anom_model_info_t* outInfo) {
     anomLastError.clear();
     if (!session || !outInfo || outInfo->struct_size < sizeof(anom_model_info_t)) {
@@ -393,7 +395,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_model_info(
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_execution_info(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_get_execution_info(
     const anom_session_t* session, anom_execution_info_t* outInfo) {
     anomLastError.clear();
     constexpr std::size_t minimumSize = offsetof(anom_execution_info_t, reserved);
@@ -415,13 +417,13 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_session_get_execution_info(
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_session_predict(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_predict(
     anom_session_t* session, const anom_image_t* image,
     anom_prediction_t* outPrediction) {
     return anom_session_predict_batch(session, image, 1, outPrediction);
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_session_predict_batch(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_predict_batch(
     anom_session_t* session, const anom_image_t* images, size_t imageCount,
     anom_prediction_t* outPredictions) {
     anomLastError.clear();
@@ -518,7 +520,7 @@ anom_status_t loadAlgorithm(const char* modelPackage,
 
 template <typename Algorithm>
 void releaseAlgorithm(Algorithm* algorithm) {
-    if (!algorithm) return;
+    if (!algorithm || algorithm->struct_size < sizeof(Algorithm)) return;
     anom_session_destroy(static_cast<anom_session_t*>(algorithm->internal));
     algorithm->internal = nullptr;
     std::memset(algorithm->reserved, 0, sizeof(algorithm->reserved));
@@ -544,60 +546,63 @@ const anom_session_t* algorithmSession(const Algorithm* algorithm, const char* n
 
 }  // namespace
 
-#define ANOM_DEFINE_ALGORITHM_API(name, type, display_name)                              \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_load(                       \
-        const char* modelPackage, const anom_algorithm_options_t* options,              \
-        anom_##name##_t* algorithm) {                                                   \
-        return loadAlgorithm(modelPackage, options, algorithm, type, display_name);     \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API void anom_##name##_release(                            \
-        anom_##name##_t* algorithm) {                                                   \
-        releaseAlgorithm(algorithm);                                                    \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_warmup(                    \
-        anom_##name##_t* algorithm) {                                                   \
-        auto* session = algorithmSession(algorithm, display_name);                      \
-        return session ? anom_session_warmup(session) : ANOM_STATUS_INVALID_ARGUMENT;   \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_get_model_info(             \
-        const anom_##name##_t* algorithm, anom_model_info_t* outInfo) {                 \
-        const auto* session = algorithmSession(algorithm, display_name);                \
-        return session ? anom_session_get_model_info(session, outInfo)                  \
-                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_get_execution_info(         \
-        const anom_##name##_t* algorithm, anom_execution_info_t* outInfo) {             \
-        const auto* session = algorithmSession(algorithm, display_name);                \
-        return session ? anom_session_get_execution_info(session, outInfo)              \
-                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_predict(                   \
-        anom_##name##_t* algorithm, const anom_image_t* image,                         \
-        anom_prediction_t* outPrediction) {                                             \
-        auto* session = algorithmSession(algorithm, display_name);                      \
-        return session ? anom_session_predict(session, image, outPrediction)            \
-                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_predict_batch(             \
-        anom_##name##_t* algorithm, const anom_image_t* images, size_t imageCount,      \
-        anom_prediction_t* outPredictions) {                                            \
-        auto* session = algorithmSession(algorithm, display_name);                      \
-        return session ? anom_session_predict_batch(                                   \
-                             session, images, imageCount, outPredictions)               \
-                       : ANOM_STATUS_INVALID_ARGUMENT;                                  \
+namespace anom::c_api {
+
+#define ANOM_DEFINE_ALGORITHM_IMPL(name, type, display_name)                         \
+    anom_status_t ANOM_CALL name##Load(                                              \
+        anom_##name##_t* algorithm, const char* modelPackage,                       \
+        const anom_algorithm_options_t* options) {                                  \
+        return loadAlgorithm(modelPackage, options, algorithm, type, display_name); \
+    }                                                                                \
+    void ANOM_CALL name##Release(anom_##name##_t* algorithm) {                      \
+        releaseAlgorithm(algorithm);                                                 \
+    }                                                                                \
+    anom_status_t ANOM_CALL name##Warmup(anom_##name##_t* algorithm) {              \
+        auto* session = algorithmSession(algorithm, display_name);                   \
+        return session ? anom_session_warmup(session)                               \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                               \
+    }                                                                                \
+    anom_status_t ANOM_CALL name##GetModelInfo(                                     \
+        const anom_##name##_t* algorithm, anom_model_info_t* outInfo) {             \
+        const auto* session = algorithmSession(algorithm, display_name);             \
+        return session ? anom_session_get_model_info(session, outInfo)              \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                               \
+    }                                                                                \
+    anom_status_t ANOM_CALL name##GetExecutionInfo(                                 \
+        const anom_##name##_t* algorithm, anom_execution_info_t* outInfo) {         \
+        const auto* session = algorithmSession(algorithm, display_name);             \
+        return session ? anom_session_get_execution_info(session, outInfo)          \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                               \
+    }                                                                                \
+    anom_status_t ANOM_CALL name##Predict(                                          \
+        anom_##name##_t* algorithm, const anom_image_t* image,                      \
+        anom_prediction_t* outPrediction) {                                         \
+        auto* session = algorithmSession(algorithm, display_name);                   \
+        return session ? anom_session_predict(session, image, outPrediction)        \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                               \
+    }                                                                                \
+    anom_status_t ANOM_CALL name##PredictBatch(                                     \
+        anom_##name##_t* algorithm, const anom_image_t* images,                     \
+        size_t imageCount, anom_prediction_t* outPredictions) {                     \
+        auto* session = algorithmSession(algorithm, display_name);                   \
+        return session ? anom_session_predict_batch(                                \
+                             session, images, imageCount, outPredictions)            \
+                       : ANOM_STATUS_INVALID_ARGUMENT;                               \
     }
 
-ANOM_DEFINE_ALGORITHM_API(direct, AlgorithmType::Direct, "Direct")
-ANOM_DEFINE_ALGORITHM_API(efficientad, AlgorithmType::EfficientAD, "EfficientAD")
-ANOM_DEFINE_ALGORITHM_API(dfkde, AlgorithmType::DFKDE, "DFKDE")
-ANOM_DEFINE_ALGORITHM_API(padim, AlgorithmType::Padim, "PaDiM")
-ANOM_DEFINE_ALGORITHM_API(patchcore, AlgorithmType::PatchCore, "PatchCore")
-ANOM_DEFINE_ALGORITHM_API(spade, AlgorithmType::SPADE, "SPADE")
-ANOM_DEFINE_ALGORITHM_API(yolo, AlgorithmType::Yolo, "YOLO")
+ANOM_DEFINE_ALGORITHM_IMPL(direct, AlgorithmType::Direct, "Direct")
+ANOM_DEFINE_ALGORITHM_IMPL(efficientad, AlgorithmType::EfficientAD, "EfficientAD")
+ANOM_DEFINE_ALGORITHM_IMPL(dfkde, AlgorithmType::DFKDE, "DFKDE")
+ANOM_DEFINE_ALGORITHM_IMPL(padim, AlgorithmType::Padim, "PaDiM")
+ANOM_DEFINE_ALGORITHM_IMPL(patchcore, AlgorithmType::PatchCore, "PatchCore")
+ANOM_DEFINE_ALGORITHM_IMPL(spade, AlgorithmType::SPADE, "SPADE")
+ANOM_DEFINE_ALGORITHM_IMPL(yolo, AlgorithmType::Yolo, "YOLO")
 
-#undef ANOM_DEFINE_ALGORITHM_API
+#undef ANOM_DEFINE_ALGORITHM_IMPL
 
-extern "C" ANOM_ENGINE_API void anom_prediction_release(anom_prediction_t* prediction) {
+}  // namespace anom::c_api
+
+extern "C" ANOM_ENGINE_API void ANOM_CALL anom_prediction_release(anom_prediction_t* prediction) {
     if (!prediction) return;
     delete static_cast<PredictionStorage*>(prediction->internal);
     const uint32_t structSize = prediction->struct_size;
@@ -605,7 +610,7 @@ extern "C" ANOM_ENGINE_API void anom_prediction_release(anom_prediction_t* predi
     prediction->struct_size = structSize;
 }
 
-extern "C" ANOM_ENGINE_API size_t anom_get_last_error(char* buffer, size_t bufferSize) {
+extern "C" ANOM_ENGINE_API size_t ANOM_CALL anom_get_last_error(char* buffer, size_t bufferSize) {
     const std::size_t required = anomLastError.size() + 1;
     if (buffer && bufferSize != 0) {
         const std::size_t count = std::min(anomLastError.size(), bufferSize - 1);

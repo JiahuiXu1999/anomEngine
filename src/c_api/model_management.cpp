@@ -1,6 +1,8 @@
 #define ANOM_ENGINE_ENABLE_LEGACY_SESSION_API 1
 #include "anomEngine/anomEngine.h"
 
+#include "c_api/algorithm_object_impl.h"
+
 #ifndef ANOM_ENGINE_HAS_PATCHCORE
 #  define ANOM_ENGINE_HAS_PATCHCORE 0
 #endif
@@ -569,11 +571,11 @@ void fillModelInfo(const anom_model& model, anom_model_info_t* output) {
 
 }  // namespace
 
-extern "C" ANOM_ENGINE_API size_t anom_algorithm_get_count(void) {
+extern "C" ANOM_ENGINE_API size_t ANOM_CALL anom_algorithm_get_count(void) {
     return sizeof(kCapabilities) / sizeof(kCapabilities[0]);
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_algorithm_get_info(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_algorithm_get_info(
     size_t index, anom_algorithm_info_t* outInfo) {
     anomLastError.clear();
     if (!outInfo || outInfo->struct_size < sizeof(anom_algorithm_info_t) ||
@@ -591,7 +593,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_algorithm_get_info(
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_model_open(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_model_open(
     const char* modelPackage, anom_model_t** outModel) {
     anomLastError.clear();
     if (!outModel) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Model output pointer is null");
@@ -612,7 +614,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_model_open(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_model_get_info(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_model_get_info(
     const anom_model_t* model, anom_model_info_t* outInfo) {
     anomLastError.clear();
     if (!model || !outInfo || outInfo->struct_size < sizeof(anom_model_info_t)) {
@@ -622,7 +624,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_model_get_info(
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_model_validate(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_model_validate(
     const char* modelPackage, const anom_model_validate_options_t* options,
     anom_model_validation_report_t* outReport) {
     anomLastError.clear();
@@ -657,11 +659,11 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_model_validate(
     }
 }
 
-extern "C" ANOM_ENGINE_API void anom_model_destroy(anom_model_t* model) {
+extern "C" ANOM_ENGINE_API void ANOM_CALL anom_model_destroy(anom_model_t* model) {
     delete model;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_create(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_package_builder_create(
     const anom_package_builder_options_t* options,
     anom_package_builder_t** outBuilder) {
     anomLastError.clear();
@@ -687,7 +689,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_create(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_add_artifact(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_package_builder_add_artifact(
     anom_package_builder_t* builder, const char* sourcePath,
     const char* packageRelativePath) {
     anomLastError.clear();
@@ -721,7 +723,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_add_artifact(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_commit(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_package_builder_commit(
     anom_package_builder_t* builder, const char* outputPackage) {
     anomLastError.clear();
     if (!builder || builder->committed || !outputPackage || !*outputPackage) {
@@ -735,7 +737,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_commit(
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_apply_calibration(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_package_builder_apply_calibration(
     anom_package_builder_t* builder,
     const anom_calibration_result_t* calibration) {
     anomLastError.clear();
@@ -764,12 +766,12 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_package_builder_apply_calibration(
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API void anom_package_builder_destroy(
+extern "C" ANOM_ENGINE_API void ANOM_CALL anom_package_builder_destroy(
     anom_package_builder_t* builder) {
     delete builder;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_create(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_create(
     const anom_fitter_options_t* options, anom_fitter_t** outFitter) {
     anomLastError.clear();
     if (!outFitter) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Fitter output pointer is null");
@@ -884,7 +886,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_create(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_add_batch(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_add_batch(
     anom_fitter_t* fitter, const anom_image_t* images, size_t imageCount) {
     anomLastError.clear();
     if (!fitter || !images || imageCount == 0 ||
@@ -982,7 +984,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_add_batch(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_get_progress(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_get_progress(
     const anom_fitter_t* fitter, anom_fit_progress_t* outProgress) {
     anomLastError.clear();
     if (!fitter || !outProgress || outProgress->struct_size < sizeof(anom_fit_progress_t)) {
@@ -1001,7 +1003,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_get_progress(
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_save_checkpoint(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_save_checkpoint(
     const anom_fitter_t* fitter, const char* checkpointPath) {
     anomLastError.clear();
     if (!fitter || !checkpointPath || !*checkpointPath) {
@@ -1032,7 +1034,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_save_checkpoint(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_load_checkpoint(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_load_checkpoint(
     anom_fitter_t* fitter, const char* checkpointPath) {
     anomLastError.clear();
     if (!fitter || !checkpointPath || !*checkpointPath ||
@@ -1081,7 +1083,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_load_checkpoint(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_cancel(anom_fitter_t* fitter) {
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_cancel(anom_fitter_t* fitter) {
     anomLastError.clear();
     if (!fitter) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Fitter is null");
     fitter->cancellationRequested.store(true, std::memory_order_release);
@@ -1089,7 +1091,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_cancel(anom_fitter_t* fitte
     return ANOM_STATUS_OK;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_finalize(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_finalize(
     anom_fitter_t* fitter, const char* outputPackage) {
     anomLastError.clear();
     if (!fitter || !outputPackage || !*outputPackage ||
@@ -1163,7 +1165,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_fitter_finalize(
     }
 }
 
-extern "C" ANOM_ENGINE_API void anom_fitter_destroy(anom_fitter_t* fitter) {
+extern "C" ANOM_ENGINE_API void ANOM_CALL anom_fitter_destroy(anom_fitter_t* fitter) {
     delete fitter;
 }
 
@@ -1229,9 +1231,11 @@ anom_status_t validateFitterTemplate(const char* templatePackage,
 
 }  // namespace
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_patchcore_fitter_create(
-    const anom_patchcore_fitter_options_t* options,
-    anom_patchcore_fitter_t* fitter) {
+namespace anom::c_api {
+
+anom_status_t ANOM_CALL patchcoreFitterCreate(
+    anom_patchcore_fitter_t* fitter,
+    const anom_patchcore_fitter_options_t* options) {
     anomLastError.clear();
     if (!fitter || fitter->struct_size < sizeof(*fitter) || fitter->internal ||
         !options || options->struct_size < sizeof(*options)) {
@@ -1257,9 +1261,9 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_patchcore_fitter_create(
                              "PatchCore");
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_padim_fitter_create(
-    const anom_padim_fitter_options_t* options,
-    anom_padim_fitter_t* fitter) {
+anom_status_t ANOM_CALL padimFitterCreate(
+    anom_padim_fitter_t* fitter,
+    const anom_padim_fitter_options_t* options) {
     anomLastError.clear();
     if (!fitter || fitter->struct_size < sizeof(*fitter) || fitter->internal ||
         !options || options->struct_size < sizeof(*options)) {
@@ -1283,57 +1287,65 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_padim_fitter_create(
                              "PaDiM");
 }
 
-#define ANOM_DEFINE_FITTER_API(name, display_name)                                      \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_add_batch(          \
-        anom_##name##_fitter_t* fitter, const anom_image_t* images, size_t imageCount) {\
-        auto* implementation = typedFitter(fitter, display_name);                       \
-        return implementation ? anom_fitter_add_batch(implementation, images, imageCount)\
-                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_get_progress(       \
-        const anom_##name##_fitter_t* fitter, anom_fit_progress_t* outProgress) {       \
-        const auto* implementation = typedFitter(fitter, display_name);                 \
-        return implementation ? anom_fitter_get_progress(implementation, outProgress)  \
-                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_save_checkpoint(    \
-        const anom_##name##_fitter_t* fitter, const char* path) {                       \
-        const auto* implementation = typedFitter(fitter, display_name);                 \
-        return implementation ? anom_fitter_save_checkpoint(implementation, path)      \
-                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_load_checkpoint(    \
-        anom_##name##_fitter_t* fitter, const char* path) {                             \
-        auto* implementation = typedFitter(fitter, display_name);                       \
-        return implementation ? anom_fitter_load_checkpoint(implementation, path)      \
-                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_cancel(             \
-        anom_##name##_fitter_t* fitter) {                                               \
-        auto* implementation = typedFitter(fitter, display_name);                       \
-        return implementation ? anom_fitter_cancel(implementation)                     \
-                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API anom_status_t anom_##name##_fitter_finalize(           \
-        anom_##name##_fitter_t* fitter, const char* outputPackage) {                    \
-        auto* implementation = typedFitter(fitter, display_name);                       \
-        return implementation ? anom_fitter_finalize(implementation, outputPackage)    \
-                              : ANOM_STATUS_INVALID_ARGUMENT;                           \
-    }                                                                                   \
-    extern "C" ANOM_ENGINE_API void anom_##name##_fitter_release(                     \
-        anom_##name##_fitter_t* fitter) {                                               \
-        if (!fitter) return;                                                            \
-        anom_fitter_destroy(static_cast<anom_fitter_t*>(fitter->internal));             \
-        fitter->internal = nullptr;                                                     \
-        std::memset(fitter->reserved, 0, sizeof(fitter->reserved));                     \
+#define ANOM_DEFINE_FITTER_IMPL(name, display_name)                               \
+    anom_status_t ANOM_CALL name##FitterAddBatch(                                \
+        anom_##name##_fitter_t* fitter, const anom_image_t* images,              \
+        size_t imageCount) {                                                      \
+        auto* implementation = typedFitter(fitter, display_name);                 \
+        return implementation                                                    \
+                   ? anom_fitter_add_batch(implementation, images, imageCount)    \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
+    }                                                                             \
+    anom_status_t ANOM_CALL name##FitterGetProgress(                             \
+        const anom_##name##_fitter_t* fitter,                                    \
+        anom_fit_progress_t* outProgress) {                                       \
+        const auto* implementation = typedFitter(fitter, display_name);           \
+        return implementation                                                    \
+                   ? anom_fitter_get_progress(implementation, outProgress)        \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
+    }                                                                             \
+    anom_status_t ANOM_CALL name##FitterSaveCheckpoint(                          \
+        const anom_##name##_fitter_t* fitter, const char* path) {                \
+        const auto* implementation = typedFitter(fitter, display_name);           \
+        return implementation                                                    \
+                   ? anom_fitter_save_checkpoint(implementation, path)            \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
+    }                                                                             \
+    anom_status_t ANOM_CALL name##FitterLoadCheckpoint(                          \
+        anom_##name##_fitter_t* fitter, const char* path) {                      \
+        auto* implementation = typedFitter(fitter, display_name);                 \
+        return implementation                                                    \
+                   ? anom_fitter_load_checkpoint(implementation, path)            \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
+    }                                                                             \
+    anom_status_t ANOM_CALL name##FitterCancel(                                  \
+        anom_##name##_fitter_t* fitter) {                                         \
+        auto* implementation = typedFitter(fitter, display_name);                 \
+        return implementation ? anom_fitter_cancel(implementation)               \
+                              : ANOM_STATUS_INVALID_ARGUMENT;                     \
+    }                                                                             \
+    anom_status_t ANOM_CALL name##FitterFinalize(                                \
+        anom_##name##_fitter_t* fitter, const char* outputPackage) {             \
+        auto* implementation = typedFitter(fitter, display_name);                 \
+        return implementation                                                    \
+                   ? anom_fitter_finalize(implementation, outputPackage)          \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
+    }                                                                             \
+    void ANOM_CALL name##FitterRelease(anom_##name##_fitter_t* fitter) {         \
+        if (!fitter || fitter->struct_size < sizeof(*fitter)) return;             \
+        anom_fitter_destroy(static_cast<anom_fitter_t*>(fitter->internal));       \
+        fitter->internal = nullptr;                                               \
+        std::memset(fitter->reserved, 0, sizeof(fitter->reserved));               \
     }
 
-ANOM_DEFINE_FITTER_API(patchcore, "PatchCore")
-ANOM_DEFINE_FITTER_API(padim, "PaDiM")
+ANOM_DEFINE_FITTER_IMPL(patchcore, "PatchCore")
+ANOM_DEFINE_FITTER_IMPL(padim, "PaDiM")
 
-#undef ANOM_DEFINE_FITTER_API
+#undef ANOM_DEFINE_FITTER_IMPL
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_calibrator_create(
+}  // namespace anom::c_api
+
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_calibrator_create(
     const anom_model_t* model, const anom_calibrator_options_t* options,
     anom_calibrator_t** outCalibrator) {
     anomLastError.clear();
@@ -1384,7 +1396,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_calibrator_create(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_calibrator_add_batch(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_calibrator_add_batch(
     anom_calibrator_t* calibrator, const anom_image_t* images, size_t imageCount) {
     anomLastError.clear();
     if (!calibrator || !images || imageCount == 0) {
@@ -1440,7 +1452,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_calibrator_add_batch(
     }
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t anom_calibrator_compute(
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_calibrator_compute(
     const anom_calibrator_t* calibrator, anom_calibration_result_t* outResult) {
     anomLastError.clear();
     if (!calibrator || !outResult ||
@@ -1496,7 +1508,7 @@ extern "C" ANOM_ENGINE_API anom_status_t anom_calibrator_compute(
     }
 }
 
-extern "C" ANOM_ENGINE_API void anom_calibrator_destroy(
+extern "C" ANOM_ENGINE_API void ANOM_CALL anom_calibrator_destroy(
     anom_calibrator_t* calibrator) {
     delete calibrator;
 }

@@ -277,6 +277,7 @@ add_library(anom_engine SHARED)
 add_library(anom::engine ALIAS anom_engine)
 target_sources(anom_engine PRIVATE
     "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/anom_engine.cpp"
+    "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/algorithm_objects.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/model_management.cpp")
 if(ANOM_BUILD_ALGO_PATCHCORE OR ANOM_BUILD_ALGO_PADIM)
     target_sources(anom_engine PRIVATE
@@ -309,7 +310,7 @@ target_link_libraries(anom_engine PRIVATE anom_internal)
 set_target_properties(anom_engine PROPERTIES
     OUTPUT_NAME "anomEngine"
     VERSION "${PROJECT_VERSION}"
-    SOVERSION "${PROJECT_VERSION_MAJOR}"
+    SOVERSION "3"
     INSTALL_RPATH "${ANOM_ORIGIN_RPATH}")
 anom_apply_project_defaults(anom_engine)
 
@@ -417,6 +418,8 @@ endif()
 # Tests ------------------------------------------------------------------------
 
 if(BUILD_TESTING)
+    add_subdirectory(tests/object_api)
+
     add_library(c_header_compile_test OBJECT "${ANOM_TEST_ROOT}/c_header_compile_test.c")
     target_compile_features(c_header_compile_test PRIVATE c_std_11)
     set_target_properties(c_header_compile_test PROPERTIES C_EXTENSIONS NO)
@@ -492,7 +495,14 @@ if(ANOM_PLUGIN_TARGETS)
 endif()
 install(FILES
     "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/anomEngine.h"
-    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/algorithms.hpp"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/common.h"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/direct.h"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/efficientad.h"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/dfkde.h"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/padim.h"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/patchcore.h"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/spade.h"
+    "${ANOM_PUBLIC_INCLUDE_ROOT}/anomEngine/yolo.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/anomEngine")
 
 if(WIN32)

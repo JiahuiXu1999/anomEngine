@@ -6,6 +6,10 @@ PatchCore/PaDiM fitting workflow.
 
 ## Capability discovery
 
+Include the algorithm-specific C header, such as `anomEngine/patchcore.h`, or
+use `anomEngine/anomEngine.h` for all algorithms. Algorithm and fitter objects
+expose operations directly as C function-pointer members (ABI v3).
+
 Use `anom_algorithm_get_count` and `anom_algorithm_get_info` before presenting
 an algorithm in an application. `available` reports whether its runtime plugin
 was built, while `capabilities` describes the public workflow supported by the
@@ -64,11 +68,16 @@ options.coreset_sampling_ratio = 0.1f;
 
 anom_patchcore_fitter_t fitter = {0};
 fitter.struct_size = sizeof(fitter);
-anom_patchcore_fitter_create(&options, &fitter);
-anom_patchcore_fitter_add_batch(&fitter, images, image_count);
-anom_patchcore_fitter_save_checkpoint(&fitter, "work/patchcore.ckpt");
-anom_patchcore_fitter_finalize(&fitter, "models/patchcore/1.0.0");
-anom_patchcore_fitter_release(&fitter);
+/* Example fragment: check every status in application code. */
+if (anom_patchcore_fitter_init(&fitter) != ANOM_STATUS_OK) return 1;
+if (fitter.create(&fitter, &options) != ANOM_STATUS_OK) {
+    fitter.release(&fitter);
+    return 1;
+}
+fitter.add_batch(&fitter, images, image_count);
+fitter.save_checkpoint(&fitter, "work/patchcore.ckpt");
+fitter.finalize(&fitter, "models/patchcore/1.0.0");
+fitter.release(&fitter);
 ```
 
 PatchCore templates that already contain a FAISS index seed the fitter with
@@ -107,7 +116,8 @@ YOLO, EfficientAD, and Direct graphs; they do not enter the artifact fitter.
 
 ## ABI ownership
 
-All public structures must be zero-initialized and have `struct_size` set. All
-opaque handles are owned by the caller and released with their matching
-`*_destroy` function. Strings returned in algorithm and model information are
+All public structures must be zero-initialized and have `struct_size` set.
+Initialize algorithm/fitter method tables with the matching `*_init` function.
+Their runtimes are released through `object.release(&object)`; opaque model,
+builder and calibrator handles use their matching `*_destroy` function. Strings returned in algorithm and model information are
 owned by anomEngine and remain valid for the documented handle lifetime.
