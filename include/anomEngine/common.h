@@ -96,9 +96,13 @@ enum {
 };
 
 /*
- * Options shared by the algorithm objects. AUTO tries TensorRT/CUDA, then
- * ONNX Runtime/CPU. A non-empty backend_utf8 constrains selection to
- * "tensorrt" or "onnxruntime".
+ * Options shared by the algorithm objects. AUTO tries TensorRT/CUDA,
+ * ONNX Runtime/CUDA, then ONNX Runtime/CPU, subject to available artifacts.
+ * A non-empty backend_utf8 constrains selection to "tensorrt" or "onnxruntime".
+ * CPU never initializes CUDA. GPU requires a GPU inference provider unless
+ * LOAD_ONLY fallback is enabled. Preprocessing, adapters and postprocessing
+ * currently execute on CPU. AUTO allows CPU selection even with FALLBACK_NONE.
+ * Selection is fixed after load/warmup; predict never retries on another device.
  */
 typedef struct anom_algorithm_options {
     uint32_t struct_size;
@@ -111,6 +115,18 @@ typedef struct anom_algorithm_options {
     const char* backend_utf8;
     uint32_t reserved[8];
 } anom_algorithm_options_t;
+
+/* Probe one backend/provider/device without loading a model. backend_utf8 must
+ * be "tensorrt" or "onnxruntime"; provider_utf8 must be "cpu" or "cuda".
+ * device_id is -1 (default device 0) or non-negative; ignored for CPU.
+ * A null/empty plugin directory uses the SDK directory. Returns OK when the
+ * runtime/device is usable, UNSUPPORTED when unavailable, or a plugin/argument
+ * error. anom_get_last_error supplies details. Model/operator compatibility and
+ * available memory are still checked during load. Legacy plugins may not probe.
+ * CUDA probing can initialize the driver/provider; CPU probing does not. */
+ANOM_ENGINE_API anom_status_t ANOM_CALL anom_runtime_probe(
+    const char* backend_utf8, const char* provider_utf8, int32_t device_id,
+    const char* plugin_directory_utf8);
 
 typedef struct anom_image {
     uint32_t struct_size;

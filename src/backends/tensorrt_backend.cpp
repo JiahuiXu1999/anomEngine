@@ -88,6 +88,29 @@ Status cudaStatus(cudaError_t error, const std::string& operation) {
                          operation + " failed", cudaGetErrorString(error));
 }
 
+// CUDA's current device is thread-local. Objects may be loaded, invoked and
+// destroyed on different threads; restore the caller's device on every exit.
+class CudaDeviceScope {
+public:
+    Result<void> select(int device) {
+        auto error = cudaGetDevice(&previous_);
+        if (error != cudaSuccess) return cudaStatus(error, "cudaGetDevice");
+        if (previous_ == device) return {};
+        error = cudaSetDevice(device);
+        if (error != cudaSuccess) return cudaStatus(error, "cudaSetDevice");
+        changed_ = true;
+        return {};
+    }
+    ~CudaDeviceScope() { if (changed_) cudaSetDevice(previous_); }
+    void selectForCleanup(int device) noexcept {
+        if (cudaGetDevice(&previous_) == cudaSuccess && previous_ != device &&
+            cudaSetDevice(device) == cudaSuccess) changed_ = true;
+    }
+private:
+    int previous_{0};
+    bool changed_{false};
+};
+
 std::vector<char> readBinary(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     if (!stream) throw std::runtime_error("Unable to open " + path.string());
@@ -111,6 +134,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         reset();
         config_ = config;
+        if (config.provider != ExecutionProvider::Default && config.provider != ExecutionProvider::Cuda)
+            return failure(ErrorCode::InvalidArgument, "TensorRT requires the CUDA provider");
         int deviceCount = 0;
         const auto countStatus = cudaGetDeviceCount(&deviceCount);
         if (countStatus != cudaSuccess || deviceCount <= 0) {
@@ -124,12 +149,9 @@ public:
                            std::to_string(config.deviceId) + " requested, " +
                                std::to_string(deviceCount) + " available");
         }
-        const auto deviceStatus = cudaSetDevice(config.deviceId);
-        if (deviceStatus != cudaSuccess) {
-            return failure(ErrorCode::DeviceUnavailable,
-                           "Unable to select the requested CUDA device",
-                           cudaGetErrorString(deviceStatus));
-        }
+        CudaDeviceScope deviceScope;
+        auto deviceStatus = deviceScope.select(config.deviceId);
+        if (!deviceStatus) return deviceStatus.status();
         runtime_ = nvinfer1::createInferRuntime(logger_);
         if (!runtime_) return failure(ErrorCode::BackendFailure, "Unable to create TensorRT runtime");
 
@@ -178,6 +200,9 @@ public:
     Result<TensorMap> infer(const TensorMap& inputs) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!loaded_ || !context_) return failureResult<TensorMap>(ErrorCode::NotInitialized, "Backend is not loaded");
+        CudaDeviceScope deviceScope;
+        auto selected = deviceScope.select(config_.deviceId);
+        if (!selected) return selected.status();
 
         for (const auto& spec : signature_.inputs) {
             const auto found = inputs.find(spec.name);
@@ -206,6 +231,12 @@ public:
         }
 
         TensorMap outputs;
+        // Drain queued transfers even on errors before host inputs/outputs die.
+        struct StreamCompletion {
+            cudaStream_t stream;
+            bool complete{false};
+            ~StreamCompletion() { if (!complete) cudaStreamSynchronize(stream); }
+        } completion{stream_};
         for (const auto& spec : signature_.inputs) {
             const Tensor& tensor = inputs.at(spec.name);
             auto buffer = ensureBuffer(spec.name, tensor.byteSize());
@@ -257,6 +288,7 @@ public:
         }
         const auto syncError = cudaStreamSynchronize(stream_);
         if (syncError != cudaSuccess) return cudaStatus(syncError, "cudaStreamSynchronize");
+        completion.complete = true;
         return outputs;
     }
 
@@ -441,6 +473,8 @@ private:
 
     void reset() noexcept {
         loaded_ = false;
+        CudaDeviceScope deviceScope;
+        if (runtime_ || stream_ || !buffers_.empty()) deviceScope.selectForCleanup(config_.deviceId);
         for (auto& [_, buffer] : buffers_) if (buffer.device) cudaFree(buffer.device);
         buffers_.clear();
         if (stream_) { cudaStreamDestroy(stream_); stream_ = nullptr; }
@@ -467,6 +501,17 @@ TensorRTBackend::~TensorRTBackend() = default;
 TensorRTBackend::TensorRTBackend(TensorRTBackend&&) noexcept = default;
 TensorRTBackend& TensorRTBackend::operator=(TensorRTBackend&&) noexcept = default;
 Result<void> TensorRTBackend::load(const BackendConfig& config) { return impl_->load(config); }
+Result<void> TensorRTBackend::probe(ExecutionProvider provider, int deviceId) {
+    if (provider != ExecutionProvider::Default && provider != ExecutionProvider::Cuda)
+        return Status::error(ErrorCode::InvalidArgument, "TensorRT requires the CUDA provider");
+    int count = 0;
+    const auto error = cudaGetDeviceCount(&count);
+    if (error != cudaSuccess)
+        return Status::error(ErrorCode::DeviceUnavailable, "Unable to enumerate CUDA devices", cudaGetErrorString(error));
+    if (deviceId < 0 || deviceId >= count)
+        return Status::error(ErrorCode::DeviceUnavailable, "Requested CUDA device is unavailable", std::to_string(deviceId));
+    return {};
+}
 Result<TensorMap> TensorRTBackend::infer(const TensorMap& inputs) { return impl_->infer(inputs); }
 const TensorSignature& TensorRTBackend::signature() const noexcept { return impl_->signature(); }
 int TensorRTBackend::maxBatchSize() const noexcept { return impl_->maxBatchSize(); }

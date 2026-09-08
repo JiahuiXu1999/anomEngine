@@ -26,6 +26,10 @@ endif()
 
 option(ANOM_ENABLE_TENSORRT "Build the TensorRT backend plugin" ON)
 option(ANOM_ENABLE_ONNXRUNTIME "Build the ONNX Runtime backend plugin" ON)
+option(ANOM_ENABLE_ORT_CUDA "Allow the ONNX Runtime plugin to use its optional CUDA provider" OFF)
+if(ANOM_ENABLE_ORT_CUDA AND NOT ANOM_ENABLE_ONNXRUNTIME)
+    message(FATAL_ERROR "ANOM_ENABLE_ORT_CUDA requires ANOM_ENABLE_ONNXRUNTIME")
+endif()
 option(ANOM_BUILD_ALGO_DIRECT "Build the direct-prediction algorithm plugin" ON)
 option(ANOM_BUILD_ALGO_EFFICIENTAD "Build the EfficientAD algorithm plugin" ON)
 option(ANOM_BUILD_ALGO_DFKDE "Build the DFKDE algorithm plugin" ON)
@@ -405,7 +409,8 @@ if(ANOM_ENABLE_ONNXRUNTIME)
         "${ANOM_PRIVATE_SOURCE_ROOT}/backends/ort_backend.cpp"
         "${ANOM_PRIVATE_SOURCE_ROOT}/model/types.cpp")
     target_compile_definitions(anom_backend_onnxruntime PRIVATE
-        ANOM_BACKEND_ONNXRUNTIME=1 ANOM_BACKEND_NAME="onnxruntime")
+        ANOM_BACKEND_ONNXRUNTIME=1 ANOM_BACKEND_NAME="onnxruntime"
+        ANOM_ENABLE_ORT_CUDA=$<BOOL:${ANOM_ENABLE_ORT_CUDA}>)
     target_include_directories(anom_backend_onnxruntime PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}")
     target_link_libraries(anom_backend_onnxruntime PRIVATE anom::opencv anom::onnxruntime)
     set_target_properties(anom_backend_onnxruntime PROPERTIES
@@ -453,12 +458,34 @@ if(BUILD_TESTING)
     add_test(NAME model_contract_tests COMMAND model_contract_tests)
 
     if(ANOM_ENABLE_ONNXRUNTIME AND ANOM_BUILD_ALGO_DIRECT)
+        add_library(legacy_backend_plugin MODULE "${ANOM_TEST_ROOT}/legacy_backend_plugin.cpp")
+        target_include_directories(legacy_backend_plugin PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}")
+        set_target_properties(legacy_backend_plugin PROPERTIES
+            PREFIX "" OUTPUT_NAME "anom_backend_onnxruntime"
+            ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/legacy_plugins"
+            LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/legacy_plugins"
+            RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/legacy_plugins")
+        anom_apply_project_defaults(legacy_backend_plugin)
         add_executable(ort_backend_tests "${ANOM_TEST_ROOT}/ort_backend_tests.cpp")
         target_link_libraries(ort_backend_tests PRIVATE anom_internal)
-        target_compile_definitions(ort_backend_tests PRIVATE ANOM_TEST_DATA_DIR="${ANOM_TEST_ROOT}/data")
-        add_dependencies(ort_backend_tests anom_backend_onnxruntime anom_algo_direct)
+        target_compile_definitions(ort_backend_tests PRIVATE
+            ANOM_TEST_DATA_DIR="${ANOM_TEST_ROOT}/data"
+            ANOM_TEST_LEGACY_PLUGIN_DIR="$<TARGET_FILE_DIR:legacy_backend_plugin>")
+        add_dependencies(ort_backend_tests anom_backend_onnxruntime anom_algo_direct legacy_backend_plugin)
         anom_apply_project_defaults(ort_backend_tests)
         add_test(NAME ort_backend_tests COMMAND ort_backend_tests)
+
+        add_executable(runtime_device_tests "${ANOM_TEST_ROOT}/runtime_device_tests.cpp")
+        target_link_libraries(runtime_device_tests PRIVATE anom_internal)
+        target_compile_definitions(runtime_device_tests PRIVATE ANOM_TEST_DATA_DIR="${ANOM_TEST_ROOT}/data")
+        add_dependencies(runtime_device_tests ${ANOM_BACKEND_TARGETS})
+        anom_apply_project_defaults(runtime_device_tests)
+        add_test(NAME ort_cuda_device_tests COMMAND runtime_device_tests onnxruntime)
+        set_tests_properties(ort_cuda_device_tests PROPERTIES SKIP_RETURN_CODE 77)
+        if(ANOM_ENABLE_TENSORRT)
+            add_test(NAME tensorrt_device_tests COMMAND runtime_device_tests tensorrt)
+            set_tests_properties(tensorrt_device_tests PROPERTIES SKIP_RETURN_CODE 77)
+        endif()
 
         add_executable(c_api_contract_tests "${ANOM_TEST_ROOT}/c_api_contract_tests.cpp")
         target_include_directories(c_api_contract_tests PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}")
@@ -532,6 +559,12 @@ if(WIN32)
     if(ANOM_ENABLE_ONNXRUNTIME)
         list(APPEND ANOM_RUNTIME_FILES
             "$<TARGET_FILE:anom::onnxruntime>")
+        if(ANOM_ENABLE_ORT_CUDA)
+            get_filename_component(_anom_ort_runtime_dir "${ANOM_ONNXRUNTIME_SHARED_LIBRARY}" DIRECTORY)
+            file(GLOB _anom_ort_provider_files CONFIGURE_DEPENDS
+                "${_anom_ort_runtime_dir}/onnxruntime_providers_*.dll")
+            list(APPEND ANOM_RUNTIME_FILES ${_anom_ort_provider_files})
+        endif()
     endif()
 
     function(anom_deploy_runtime_dependencies target_name)

@@ -5,7 +5,8 @@
 namespace anom::model {
 
 // Constructs the requested runtime without loading model artifacts.
-// Runtime availability is decided at build time and reported as a Status.
+// Plugin loading is checked here; probe() checks provider/device availability,
+// and load() additionally validates the model and allocates execution resources.
 Result<std::unique_ptr<IRuntimeBackend>> createRuntimeBackend(
     RuntimeBackend backend,
     const std::filesystem::path& pluginDirectory = {});

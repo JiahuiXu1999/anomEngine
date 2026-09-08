@@ -18,6 +18,7 @@ public:
     OrtBackend& operator=(OrtBackend&&) noexcept;
 
     Result<void> load(const BackendConfig& config) override;
+    Result<void> probe(ExecutionProvider provider, int deviceId) override;
     Result<TensorMap> infer(const TensorMap& inputs) override;
     [[nodiscard]] const TensorSignature& signature() const noexcept override;
     [[nodiscard]] int maxBatchSize() const noexcept override;

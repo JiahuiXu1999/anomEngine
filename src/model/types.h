@@ -22,6 +22,8 @@ enum class AlgorithmType { PatchCore, Padim, Direct, EfficientAD, DFKDE, SPADE, 
 enum class GraphContract { FeaturePyramid, Prediction };
 enum class EngineLoadPolicy { EngineOnly, PreferEngine, BuildIfMissing };
 enum class RuntimeBackend { TensorRT, OnnxRuntime };
+// Values also form the optional backend execution extension's C ABI.
+enum class ExecutionProvider { Default = 0, Cpu = 1, Cuda = 2 };
 enum class OrtGraphOptimization { Disabled, Basic, Extended, All };
 enum class OrtExecutionMode { Sequential, Parallel };
 enum class DevicePreference { Manifest, Auto, Cpu, Gpu };

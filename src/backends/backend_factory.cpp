@@ -34,14 +34,16 @@ std::string pluginError(const anom_backend_plugin_api_v1& api, void* instance) {
 class DynamicBackend final : public IRuntimeBackend {
 public:
     DynamicBackend(std::shared_ptr<plugins::DynamicLibrary> library,
-                   anom_backend_plugin_api_v1 api)
-        : library_(std::move(library)), api_(api) {}
+                   anom_backend_plugin_api_v1 api, anom_backend_execution_api_v1 execution)
+        : library_(std::move(library)), api_(api), execution_(execution) {}
 
     ~DynamicBackend() override {
         if (instance_ && api_.destroy) api_.destroy(instance_);
     }
 
     Result<void> load(const BackendConfig& config) override {
+        if (config.backend == RuntimeBackend::TensorRT && config.provider == ExecutionProvider::Cpu)
+            return Status::error(ErrorCode::InvalidArgument, "TensorRT requires the CUDA provider");
         if (instance_) {
             return Status::error(ErrorCode::InvalidArgument,
                                  "Backend plugin is already loaded");
@@ -72,7 +74,14 @@ public:
         converted.profile_file_prefix_utf8 = profilePath.c_str();
 
         void* instance = nullptr;
-        const int32_t created = api_.create(&converted, &instance);
+        const bool needsExtension = config.provider == ExecutionProvider::Cuda &&
+                                    config.backend == RuntimeBackend::OnnxRuntime;
+        if (needsExtension && !execution_.create_with_provider)
+            return Status::error(ErrorCode::DeviceUnavailable,
+                                 "Backend plugin does not support explicit CUDA selection");
+        const int32_t created = execution_.create_with_provider
+            ? execution_.create_with_provider(&converted, static_cast<int32_t>(config.provider), &instance)
+            : api_.create(&converted, &instance);
         if (created != 0 || !instance) {
             const std::string message = pluginError(api_, instance);
             if (instance) api_.destroy(instance);
@@ -105,6 +114,16 @@ public:
             return Status::error(ErrorCode::BackendFailure,
                                  "Backend plugin returned an invalid maximum batch size");
         }
+        return {};
+    }
+
+    Result<void> probe(ExecutionProvider provider, int deviceId) override {
+        if (!execution_.probe)
+            return Status::error(ErrorCode::DeviceUnavailable,
+                                 "Legacy backend plugin does not support runtime probing");
+        const auto status = execution_.probe(static_cast<int32_t>(provider), deviceId);
+        if (status != 0)
+            return Status::error(pluginErrorCode(status), "Runtime is unavailable", pluginError(api_, nullptr));
         return {};
     }
 
@@ -200,6 +219,7 @@ private:
 
     std::shared_ptr<plugins::DynamicLibrary> library_;
     anom_backend_plugin_api_v1 api_{};
+    anom_backend_execution_api_v1 execution_{};
     void* instance_{nullptr};
     TensorSignature signature_;
     int maxBatchSize_{0};
@@ -235,8 +255,17 @@ Result<std::unique_ptr<IRuntimeBackend>> createRuntimeBackend(
         return Status::error(ErrorCode::PluginAbiMismatch,
                              "Backend plugin ABI or function table is invalid", pathToUtf8(path));
     }
+    anom_backend_execution_api_v1 execution{};
+    auto executionQuery = reinterpret_cast<anom_backend_query_execution_v1_fn>(
+        library.value()->symbol("anom_backend_query_execution_v1"));
+    if (executionQuery) {
+        execution.struct_size = sizeof(execution);
+        if (executionQuery(1, &execution) != 0 || execution.abi_version != 1 ||
+            execution.struct_size < sizeof(execution) || !execution.create_with_provider || !execution.probe)
+            return Status::error(ErrorCode::PluginAbiMismatch, "Backend execution extension is invalid");
+    }
     return std::unique_ptr<IRuntimeBackend>(
-        new DynamicBackend(std::move(library.value()), api));
+        new DynamicBackend(std::move(library.value()), api, execution));
 }
 
 }  // namespace anom::model

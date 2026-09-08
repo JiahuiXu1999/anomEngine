@@ -142,6 +142,8 @@ void testExecutionSelectionCAbi() {
 
     options.backend_utf8 = "onnxruntime";
     options.device = ANOM_DEVICE_GPU;
+    // Force an unavailable device independently of whether CI has a GPU.
+    options.device_id = INT32_MAX;
     options.fallback = ANOM_FALLBACK_LOAD_ONLY;
     options.precision = ANOM_PRECISION_AUTO;
     require(direct.load(&direct, packageUtf8.c_str(), &options) ==
@@ -161,10 +163,9 @@ void testExecutionSelectionCAbi() {
     options.fallback = ANOM_FALLBACK_NONE;
     require(direct.load(&direct, packageUtf8.c_str(), &options) ==
                 ANOM_STATUS_UNSUPPORTED,
-            "Strict GPU request unexpectedly accepted the CPU-only ORT backend");
+            "Strict GPU request unexpectedly accepted an unavailable CUDA device");
     require(direct.internal == nullptr, "Rejected strict GPU load retained state");
 
-#if !ANOM_TEST_TENSORRT_ENABLED
     options.backend_utf8 = nullptr;
     options.device = ANOM_DEVICE_AUTO;
     options.fallback = ANOM_FALLBACK_NONE;
@@ -179,7 +180,27 @@ void testExecutionSelectionCAbi() {
                 execution.fallback_occurred == 1,
             "AUTO session did not report its CPU fallback");
     direct.release(&direct);
-#endif
+}
+
+void testRuntimeProbeCAbi() {
+    require(anom_runtime_probe("onnxruntime", "cpu", -1, nullptr) == ANOM_STATUS_OK,
+            "CPU runtime probe failed: " + lastError());
+    require(anom_runtime_probe("onnxruntime", "cuda", INT32_MAX, nullptr) == ANOM_STATUS_UNSUPPORTED,
+            "An unavailable CUDA device passed probing");
+    require(!lastError().empty(), "Unavailable device probe lost its diagnostic");
+    require(anom_runtime_probe("onnxruntime", "cpu", -1, nullptr) == ANOM_STATUS_OK && lastError().empty(),
+            "CPU probe did not clear the previous diagnostic");
+    require(anom_runtime_probe("tensorrt", "cpu", 0, nullptr) == ANOM_STATUS_INVALID_ARGUMENT,
+            "TensorRT CPU probe was accepted");
+    require(anom_runtime_probe(nullptr, "cpu", 0, nullptr) == ANOM_STATUS_INVALID_ARGUMENT,
+            "Null backend was accepted");
+    require(anom_runtime_probe("onnxruntime", "invalid", 0, nullptr) == ANOM_STATUS_INVALID_ARGUMENT,
+            "Invalid provider was accepted");
+    require(anom_runtime_probe("onnxruntime", "cpu", -2, nullptr) == ANOM_STATUS_INVALID_ARGUMENT,
+            "Invalid device id was accepted");
+    const auto missing = std::filesystem::path(ANOM_TEST_DATA_DIR) / "missing_plugins";
+    require(anom_runtime_probe("onnxruntime", "cpu", 0, anom::model::pathToUtf8(missing).c_str()) ==
+                ANOM_STATUS_PLUGIN_NOT_FOUND, "Missing plugin was not reported");
 }
 
 void testIndependentAlgorithmObjects() {
@@ -438,6 +459,7 @@ int main() {
     try {
         testPublicCAbi();
         testExecutionSelectionCAbi();
+        testRuntimeProbeCAbi();
         testIndependentAlgorithmObjects();
         testModelManagementCAbi();
         testPatchCoreFitterCAbi();

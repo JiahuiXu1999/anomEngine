@@ -14,7 +14,7 @@
 - 带版本管理的 C11 ABI，确保 STL、OpenCV 类型、异常和 C++ 虚接口不跨越公共 DLL / 共享库边界。
 - 每种算法都是独立的公共对象（`anom_patchcore_t`、`anom_padim_t`、`anom_yolo_t` 等），算法专属能力无需扩充统一会话接口即可独立演进。
 - 算法插件目前支持 Direct Prediction、EfficientAD、DFKDE、PaDiM、PatchCore、SPADE，以及 YOLO 风格的预测输出。
-- 后端插件支持 NVIDIA GPU 上的 TensorRT 和 CPU 上的 ONNX Runtime。
+- 后端插件支持 NVIDIA GPU 上的 TensorRT，以及 CPU / 可选 CUDA 上的 ONNX Runtime。
 - 通过模型包清单声明张量绑定、预处理、后处理、运行时设置，以及可选的模型资源 SHA-256 校验和。
 - 共享后处理模块通过统一的结果接口提供图像分数、异常图、掩码、连通区域和耗时信息。
 - 提供适用于 Windows MSVC 和 Linux GCC / Clang 的 CMake 预设。
@@ -66,7 +66,7 @@ C 和 C++ 用户统一直接使用这些 C ABI 结构体。
 
 ## 构建
 
-原有预设会启用全部算法、两个后端、严格警告和测试。此外还提供明确的 `-cpu` 和 `-nvidia` 变体：CPU 预设不需要 TensorRT 或 CUDA；NVIDIA 预设启用 TensorRT，同时保留仅在 CPU 上运行的 ONNX Runtime 作为备用后端。配置好所需依赖的查找路径后，运行与平台和部署方式匹配的预设：
+原有预设会启用全部算法、两个后端、严格警告和测试。此外还提供明确的 `-cpu` 和 `-nvidia` 变体：CPU 预设不需要 TensorRT 或 CUDA；NVIDIA 预设启用 TensorRT，同时启用可选的 ONNX Runtime CUDA 支持，并保留 CPU 回退。配置好所需依赖的查找路径后，运行与平台和部署方式匹配的预设：
 
 ```powershell
 cmake --preset windows-msvc-ninja-release
@@ -104,6 +104,10 @@ cmake --build build/local --config Release
 在 Windows 上，CMake 路径请使用正斜杠，例如 `D:/sdk/onnxruntime`。
 
 ## 仓库结构
+
+CPU/GPU 选择、运行时探测、回退规则和 ORT CUDA 部署说明见
+[`docs/cpu-gpu-modes.md`](docs/cpu-gpu-modes.md)。GPU 模式当前加速神经网络推理，
+预处理、Faiss 检索和后处理仍在 CPU 上执行。
 
 | 路径 | 职责 |
 |---|---|

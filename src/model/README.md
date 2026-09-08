@@ -105,11 +105,16 @@ patchcore.get_execution_info(&patchcore, &execution);
 patchcore.release(&patchcore);
 ```
 
-`ANOM_DEVICE_CPU` selects ONNX Runtime CPU. `ANOM_DEVICE_GPU` selects TensorRT;
+`ANOM_DEVICE_CPU` selects ONNX Runtime CPU without initializing CUDA. `ANOM_DEVICE_GPU` tries TensorRT/CUDA and then ONNX Runtime/CUDA;
 `ANOM_FALLBACK_LOAD_ONLY` additionally permits ONNX Runtime CPU when GPU initialization fails. `ANOM_DEVICE_AUTO`
-tries TensorRT/CUDA and then ONNX Runtime/CPU. A non-empty `backend_utf8` constrains
+tries TensorRT/CUDA, ONNX Runtime/CUDA, and then ONNX Runtime/CPU, even with `ANOM_FALLBACK_NONE`. A non-empty `backend_utf8` constrains
 selection to `tensorrt` or `onnxruntime`. Fallback only occurs while loading or warming the algorithm object; prediction
 failures are never silently retried on a different device.
+
+Use `anom_runtime_probe("onnxruntime", "cuda", 0, NULL)` to check a provider/device
+without loading a model. GPU mode accelerates neural-network inference; other
+pipeline stages remain on CPU. See [CPU / GPU execution modes](../../docs/cpu-gpu-modes.md)
+for the full contract, build options and plugin compatibility.
 
 The package root must contain `manifest.json`. All artifact paths are relative to this root and are rejected if
 they are absolute or escape through `..`. An optional `checksums` object maps artifact paths to lowercase SHA-256
@@ -169,7 +174,7 @@ runtime never generates indices or fits Gaussian statistics.
 ## Runtime behavior
 
 - `runtime.backend` selects `tensorrt` (the backwards-compatible default) or `onnxruntime`.
-- ONNX Runtime uses the CPU execution provider. NVIDIA GPU execution is handled exclusively by TensorRT.
+- ONNX Runtime defaults to CPU. With `ANOM_ENABLE_ORT_CUDA=ON`, GPU load options can select its CUDA execution provider. The installed ORT distribution must include CUDA support and compatible provider dependencies.
 - ORT discovers every graph input/output from model metadata, preserves dynamic dimensions in the signature,
   validates concrete request shapes and copies resolved dynamic outputs into the backend-neutral `TensorMap`.
 - ORT thread counts, sequential/parallel execution, graph optimization, memory pattern, CPU arena, and

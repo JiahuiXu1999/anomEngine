@@ -6,6 +6,7 @@
 #include "infrastructure/utf8_path.h"
 
 #include "model/inference_session.h"
+#include "backends/backend_factory.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -618,4 +619,34 @@ extern "C" ANOM_ENGINE_API size_t ANOM_CALL anom_get_last_error(char* buffer, si
         buffer[count] = '\0';
     }
     return required;
+}
+
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_runtime_probe(
+    const char* backendName, const char* providerName, int32_t deviceId,
+    const char* pluginDirectory) {
+    anomLastError.clear();
+    try {
+        if (!backendName || !*backendName || !providerName || deviceId < -1)
+            return fail(ANOM_STATUS_INVALID_ARGUMENT, "Runtime probe arguments are invalid");
+        std::optional<RuntimeBackend> backend;
+        const auto parsed = parseBackend(backendName, backend);
+        if (parsed != ANOM_STATUS_OK) return parsed;
+        anom::model::ExecutionProvider provider;
+        if (std::strcmp(providerName, "cpu") == 0) provider = anom::model::ExecutionProvider::Cpu;
+        else if (std::strcmp(providerName, "cuda") == 0) provider = anom::model::ExecutionProvider::Cuda;
+        else return fail(ANOM_STATUS_INVALID_ARGUMENT, "Provider must be cpu or cuda");
+        if (*backend == RuntimeBackend::TensorRT && provider == anom::model::ExecutionProvider::Cpu)
+            return fail(ANOM_STATUS_INVALID_ARGUMENT, "TensorRT requires the CUDA provider");
+        LoadOptions options;
+        const auto directory = setPluginDirectory(pluginDirectory, options);
+        if (directory != ANOM_STATUS_OK) return directory;
+        auto runtime = anom::model::createRuntimeBackend(*backend, options.pluginDirectory);
+        if (!runtime) return fail(runtime.status());
+        auto available = runtime.value()->probe(provider, deviceId < 0 ? 0 : deviceId);
+        return available ? ANOM_STATUS_OK : fail(available.status());
+    } catch (const std::bad_alloc&) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while probing runtime");
+    } catch (const std::exception& error) {
+        return fail(ANOM_STATUS_INTERNAL_ERROR, error.what());
+    }
 }

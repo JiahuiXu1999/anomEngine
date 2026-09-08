@@ -67,6 +67,57 @@ Status ortFailure(const char* operation, const Ort::Exception& error) {
     return Status::error(code, std::string(operation) + " failed", error.what());
 }
 
+Result<void> appendCudaProvider(Ort::SessionOptions& options, int deviceId) {
+#if ANOM_ENABLE_ORT_CUDA
+    try {
+        const auto providers = Ort::GetAvailableProviders();
+        if (std::find(providers.begin(), providers.end(), "CUDAExecutionProvider") == providers.end())
+            return Status::error(ErrorCode::DeviceUnavailable,
+                                 "The installed ONNX Runtime has no CUDA execution provider");
+        const auto& api = Ort::GetApi();
+        OrtCUDAProviderOptionsV2* raw = nullptr;
+        Ort::ThrowOnError(api.CreateCUDAProviderOptions(&raw));
+        const auto release = [&api](OrtCUDAProviderOptionsV2* value) { api.ReleaseCUDAProviderOptions(value); };
+        std::unique_ptr<OrtCUDAProviderOptionsV2, decltype(release)> cudaOptions(raw, release);
+        const std::string id = std::to_string(deviceId);
+        const char* keys[] = {"device_id", "do_copy_in_default_stream"};
+        const char* values[] = {id.c_str(), "1"};
+        Ort::ThrowOnError(api.UpdateCUDAProviderOptions(raw, keys, values, 2));
+        Ort::ThrowOnError(api.SessionOptionsAppendExecutionProvider_CUDA_V2(options, raw));
+        return {};
+    } catch (const Ort::Exception& error) {
+        return Status::error(ErrorCode::DeviceUnavailable,
+                             "Unable to initialize ONNX Runtime CUDA provider", error.what());
+    }
+#else
+    (void)options;
+    (void)deviceId;
+    return Status::error(ErrorCode::DeviceUnavailable,
+                         "ONNX Runtime CUDA support was disabled at build time (ANOM_ENABLE_ORT_CUDA=OFF)");
+#endif
+}
+
+Result<void> probeOrtProvider(ExecutionProvider provider, int deviceId) {
+    if (provider == ExecutionProvider::Default || provider == ExecutionProvider::Cpu) return {};
+    if (provider != ExecutionProvider::Cuda || deviceId < 0)
+        return Status::error(ErrorCode::InvalidArgument, "Invalid ONNX Runtime probe arguments");
+    Ort::SessionOptions options;
+    auto appended = appendCudaProvider(options, deviceId);
+    if (!appended) return appended.status();
+#if ANOM_ENABLE_ORT_CUDA
+    const auto& api = Ort::GetApi();
+    int previousDevice = 0;
+    try {
+        Ort::ThrowOnError(api.GetCurrentGpuDeviceId(&previousDevice));
+        Ort::ThrowOnError(api.SetCurrentGpuDeviceId(deviceId));
+        Ort::ThrowOnError(api.SetCurrentGpuDeviceId(previousDevice));
+    } catch (const Ort::Exception& error) {
+        return Status::error(ErrorCode::DeviceUnavailable, "Requested ORT CUDA device is unavailable", error.what());
+    }
+#endif
+    return {};
+}
+
 }  // namespace
 
 class OrtBackend::Impl {
@@ -80,6 +131,16 @@ public:
         loaded_ = false;
         config_ = config;
 
+        if (config.provider != ExecutionProvider::Default && config.provider != ExecutionProvider::Cpu &&
+            config.provider != ExecutionProvider::Cuda)
+            return Status::error(ErrorCode::InvalidArgument, "Invalid ONNX Runtime provider");
+        if (config.provider == ExecutionProvider::Cuda && config.deviceId < 0)
+            return Status::error(ErrorCode::InvalidArgument, "CUDA device id must be non-negative");
+        if (config.provider == ExecutionProvider::Cuda) {
+            auto available = probeOrtProvider(config.provider, config.deviceId);
+            if (!available) return available.status();
+        }
+
         if (config.onnxPath.empty() || !std::filesystem::is_regular_file(config.onnxPath)) {
             return Status::error(ErrorCode::ArtifactMissing,
                                  "ONNX model does not exist", config.onnxPath.string());
@@ -87,6 +148,10 @@ public:
 
         try {
             Ort::SessionOptions options;
+            if (config.provider == ExecutionProvider::Cuda) {
+                auto cuda = appendCudaProvider(options, config.deviceId);
+                if (!cuda) return cuda.status();
+            }
             options.SetGraphOptimizationLevel(graphOptimizationLevel(config.ortGraphOptimization));
             options.SetExecutionMode(config.ortExecutionMode == OrtExecutionMode::Parallel
                                          ? ORT_PARALLEL
@@ -297,6 +362,9 @@ OrtBackend::~OrtBackend() = default;
 OrtBackend::OrtBackend(OrtBackend&&) noexcept = default;
 OrtBackend& OrtBackend::operator=(OrtBackend&&) noexcept = default;
 Result<void> OrtBackend::load(const BackendConfig& config) { return impl_->load(config); }
+Result<void> OrtBackend::probe(ExecutionProvider provider, int deviceId) {
+    return probeOrtProvider(provider, deviceId);
+}
 Result<TensorMap> OrtBackend::infer(const TensorMap& inputs) { return impl_->infer(inputs); }
 const TensorSignature& OrtBackend::signature() const noexcept { return impl_->signature(); }
 int OrtBackend::maxBatchSize() const noexcept { return impl_->maxBatchSize(); }

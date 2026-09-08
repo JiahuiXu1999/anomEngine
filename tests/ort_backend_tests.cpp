@@ -79,6 +79,25 @@ void testIdentityModel() {
 
 }
 
+void testLegacyPluginProviderNegotiation() {
+    BackendConfig config;
+    config.backend = RuntimeBackend::OnnxRuntime;
+    config.provider = ExecutionProvider::Cuda;
+    auto backend = createRuntimeBackend(config.backend, ANOM_TEST_LEGACY_PLUGIN_DIR);
+    require(backend.ok(), backend.status().describe());
+    auto loaded = backend.value()->load(config);
+    require(!loaded && loaded.status().code == ErrorCode::DeviceUnavailable,
+            "A legacy CPU plugin silently accepted CUDA");
+    auto probed = backend.value()->probe(ExecutionProvider::Cuda, 0);
+    require(!probed && probed.status().code == ErrorCode::DeviceUnavailable,
+            "A legacy plugin advertised unsupported device probing");
+    config.provider = ExecutionProvider::Cpu;
+    loaded = backend.value()->load(config);
+    require(loaded.ok(), "Legacy CPU plugin compatibility was broken: " + loaded.status().describe());
+    require(backend.value()->signature().inputs.front().name == "input",
+            "Legacy plugin signature was lost");
+}
+
 void testInferenceSessionIntegration() {
     const auto package =
         std::filesystem::path(ANOM_TEST_DATA_DIR) / "direct_ort_package";
@@ -107,6 +126,7 @@ void testInferenceSessionIntegration() {
 int main() {
     try {
         testIdentityModel();
+        testLegacyPluginProviderNegotiation();
         testInferenceSessionIntegration();
         std::cout << "ONNX Runtime backend tests passed\n";
         return 0;

@@ -65,12 +65,14 @@ Result<void> validateInputSignature(const ModelManifest& manifest,
 
 struct RuntimeCandidate {
     RuntimeBackend backend{RuntimeBackend::OnnxRuntime};
+    ExecutionProvider provider{ExecutionProvider::Cpu};
     bool fallback{false};
 };
 
 const char* candidateName(const RuntimeCandidate& candidate) noexcept {
     return candidate.backend == RuntimeBackend::TensorRT
-        ? "tensorrt/cuda" : "onnxruntime/cpu";
+        ? "tensorrt/cuda" : candidate.provider == ExecutionProvider::Cuda
+        ? "onnxruntime/cuda" : "onnxruntime/cpu";
 }
 
 bool retryableRuntimeFailure(ErrorCode code) noexcept {
@@ -100,23 +102,23 @@ std::string joinAttempts(const std::vector<std::string>& attempts) {
 Result<std::vector<RuntimeCandidate>> runtimeCandidates(
     const BackendConfig& config, const LoadOptions& options) {
     std::vector<RuntimeCandidate> result;
-    const auto add = [&](RuntimeBackend backend, bool fallback = false) {
+    const auto add = [&](RuntimeBackend backend, ExecutionProvider provider, bool fallback = false) {
         if (options.precision == PrecisionPreference::Float16 &&
             backend != RuntimeBackend::TensorRT) return;
         if (backend == RuntimeBackend::TensorRT &&
             config.enginePath.empty() && config.onnxPath.empty()) return;
         if (backend == RuntimeBackend::OnnxRuntime && config.onnxPath.empty()) return;
         for (const auto& candidate : result) {
-            if (candidate.backend == backend) return;
+            if (candidate.backend == backend && candidate.provider == provider) return;
         }
-        result.push_back({backend, fallback});
+        result.push_back({backend, provider, fallback});
     };
 
     const auto constrainedBackend = options.backend;
     switch (options.devicePreference) {
         case DevicePreference::Manifest: {
             const RuntimeBackend backend = constrainedBackend.value_or(config.backend);
-            add(backend);
+            add(backend, backend == RuntimeBackend::TensorRT ? ExecutionProvider::Cuda : ExecutionProvider::Cpu);
             break;
         }
         case DevicePreference::Cpu:
@@ -124,20 +126,24 @@ Result<std::vector<RuntimeCandidate>> runtimeCandidates(
                 return Status::error(ErrorCode::InvalidArgument,
                                      "TensorRT cannot satisfy a CPU execution request");
             }
-            add(RuntimeBackend::OnnxRuntime);
+            add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cpu);
             break;
         case DevicePreference::Gpu:
             if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
-                add(RuntimeBackend::TensorRT);
+                add(RuntimeBackend::TensorRT, ExecutionProvider::Cuda);
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)
+                add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cuda);
             if (options.fallbackPolicy == FallbackPolicy::LoadOnly &&
                 (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime))
-                add(RuntimeBackend::OnnxRuntime, true);
+                add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cpu, true);
             break;
         case DevicePreference::Auto:
             if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
-                add(RuntimeBackend::TensorRT);
-            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)
-                add(RuntimeBackend::OnnxRuntime, !constrainedBackend);
+                add(RuntimeBackend::TensorRT, ExecutionProvider::Cuda);
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime) {
+                add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cuda);
+                add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cpu, true);
+            }
             break;
     }
 
@@ -223,10 +229,11 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
     for (const auto& candidate : candidates.value()) {
         BackendConfig selectedConfig = backendConfig;
         selectedConfig.backend = candidate.backend;
+        selectedConfig.provider = candidate.provider;
         if (candidate.fallback && attempts.empty()) {
             attempts.push_back(options.devicePreference == DevicePreference::Gpu
-                ? "gpu request: ONNX Runtime is CPU-only"
-                : "tensorrt/cuda: no compatible TensorRT runtime was available");
+                ? "gpu request: no compatible GPU artifact was available"
+                : "auto request: no compatible GPU artifact was available");
         }
 
         auto backend = createRuntimeBackend(candidate.backend, options.pluginDirectory);
@@ -257,16 +264,14 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
             new InferenceSession(package.value(), std::move(backend.value()),
                                  std::move(adapter.value())));
         session->modelInfo_.runtimeBackend = candidate.backend;
-        session->modelInfo_.executionProvider = candidate.backend == RuntimeBackend::TensorRT
-            ? "cuda" : "cpu";
+        const bool onGpu = candidate.provider == ExecutionProvider::Cuda;
+        session->modelInfo_.executionProvider = onGpu ? "cuda" : "cpu";
         session->executionInfo_.requestedDevice = options.devicePreference;
         session->executionInfo_.runtimeBackend = candidate.backend;
-        session->executionInfo_.executionProvider = candidate.backend == RuntimeBackend::TensorRT
-            ? "cuda" : "cpu";
-        session->executionInfo_.deviceId = candidate.backend == RuntimeBackend::OnnxRuntime
-            ? -1 : selectedConfig.deviceId;
-        session->executionInfo_.deviceName = candidate.backend == RuntimeBackend::OnnxRuntime
-            ? "CPU" : "CUDA device " + std::to_string(selectedConfig.deviceId);
+        session->executionInfo_.executionProvider = onGpu ? "cuda" : "cpu";
+        session->executionInfo_.deviceId = onGpu ? selectedConfig.deviceId : -1;
+        session->executionInfo_.deviceName = onGpu
+            ? "CUDA device " + std::to_string(selectedConfig.deviceId) : "CPU";
         session->executionInfo_.precision =
             candidate.backend == RuntimeBackend::TensorRT && selectedConfig.fp16
                 ? PrecisionPreference::Float16 : PrecisionPreference::Float32;

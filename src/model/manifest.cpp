@@ -269,7 +269,7 @@ ModelManifest parseManifest(const json::Value& value) {
     }
 
     if (runtime.optional("provider")) {
-        throw ManifestError("runtime.provider was removed; ONNX Runtime is CPU-only",
+        throw ManifestError("runtime.provider is not a model property; select CPU/GPU through load options",
                             "$.runtime.provider");
     }
     if (runtime.optional("strict_provider")) {

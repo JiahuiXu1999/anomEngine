@@ -21,7 +21,7 @@ pluggable algorithms, and TensorRT/ONNX Runtime backends.
   evolve without expanding a generic session interface.
 - Algorithm plugins currently cover Direct Prediction, EfficientAD, DFKDE,
   PaDiM, PatchCore, SPADE, and YOLO-style prediction outputs.
-- Backend plugins support TensorRT on NVIDIA GPUs and ONNX Runtime on CPUs.
+- Backend plugins support TensorRT on NVIDIA GPUs and ONNX Runtime on CPUs or, optionally, CUDA GPUs.
 - A manifest-driven model package declares tensor bindings, preprocessing,
   postprocessing, runtime settings, and optional SHA-256 artifact checksums.
 - Shared postprocessing produces image scores, anomaly maps, masks, connected
@@ -83,7 +83,7 @@ listed below, and follow each dependency's own license terms.
 The original presets enable all algorithms, both backends, strict warnings, and
 tests. Explicit `-cpu` and `-nvidia` variants are also available; CPU presets do
 not require TensorRT or CUDA, while NVIDIA presets enable TensorRT alongside the
-CPU-only ONNX Runtime fallback. After making the required dependencies discoverable, run
+optional ONNX Runtime CUDA support and CPU fallback. After making the required dependencies discoverable, run
 the preset matching your platform and deployment:
 
 ```powershell
@@ -105,6 +105,9 @@ cmake --preset linux-gcc-ninja-release
 cmake --build --preset linux-gcc-ninja-release
 ctest --preset linux-gcc-ninja-release
 ```
+
+CPU/GPU selection, runtime probing, fallback and optional ORT CUDA deployment are
+documented in [CPU / GPU execution modes](docs/cpu-gpu-modes.md).
 
 For a smaller ONNX Runtime-only build without the FAISS-based plugins or tests:
 

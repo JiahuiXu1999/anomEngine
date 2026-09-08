@@ -61,6 +61,21 @@ typedef int32_t (ANOM_PLUGIN_CALL *anom_backend_plugin_query_v1_fn)(
     uint32_t host_abi_version,
     anom_backend_plugin_api_v1* out_api);
 
+/* Optional extension. The original v1 config and function table stay unchanged.
+ * Provider values: 0 = backend default, 1 = CPU, 2 = CUDA.
+ * Hosts MUST negotiate this extension before requesting a non-default provider.
+ * probe reports runtime/device availability; load validates model support. */
+typedef struct anom_backend_execution_api_v1 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    int32_t (ANOM_PLUGIN_CALL *create_with_provider)(
+        const anom_backend_config_v1* config, int32_t provider, void** out_instance);
+    int32_t (ANOM_PLUGIN_CALL *probe)(int32_t provider, int32_t device_id);
+} anom_backend_execution_api_v1;
+
+typedef int32_t (ANOM_PLUGIN_CALL *anom_backend_query_execution_v1_fn)(
+    uint32_t host_abi_version, anom_backend_execution_api_v1* out_api);
+
 #ifdef __cplusplus
 }
 #endif

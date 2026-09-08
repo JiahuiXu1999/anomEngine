@@ -55,15 +55,20 @@ std::unique_ptr<IRuntimeBackend> makeBackend() {
 #endif
 }
 
-int32_t ANOM_PLUGIN_CALL create(const anom_backend_config_v1* source, void** outInstance) {
+int32_t ANOM_PLUGIN_CALL createWithProvider(
+    const anom_backend_config_v1* source, int32_t provider, void** outInstance) {
     globalError.clear();
     if (!source || source->struct_size < sizeof(anom_backend_config_v1) || !outInstance) {
         return fail(nullptr, Status::error(ErrorCode::InvalidArgument,
                                            "Backend plugin create arguments are invalid"));
     }
     *outInstance = nullptr;
+    if (provider < 0 || provider > 2)
+        return fail(nullptr, Status::error(ErrorCode::InvalidArgument,
+                                           "Invalid execution provider"));
     try {
         BackendConfig config;
+        config.provider = static_cast<ExecutionProvider>(provider);
         if (source->onnx_path_utf8 && *source->onnx_path_utf8)
             config.onnxPath = pathFromUtf8(source->onnx_path_utf8);
         if (source->engine_path_utf8 && *source->engine_path_utf8)
@@ -112,6 +117,26 @@ int32_t ANOM_PLUGIN_CALL create(const anom_backend_config_v1* source, void** out
     } catch (const std::exception& error) {
         globalError = error.what();
         return static_cast<int32_t>(ErrorCode::InternalError);
+    }
+}
+
+int32_t ANOM_PLUGIN_CALL create(const anom_backend_config_v1* source, void** outInstance) {
+    return createWithProvider(source, 0, outInstance);
+}
+
+int32_t ANOM_PLUGIN_CALL probe(int32_t provider, int32_t deviceId) {
+    globalError.clear();
+    if (provider < 0 || provider > 2 || deviceId < 0)
+        return fail(nullptr, Status::error(ErrorCode::InvalidArgument,
+                                           "Invalid runtime probe arguments"));
+    try {
+        auto backend = makeBackend();
+        auto result = backend->probe(static_cast<ExecutionProvider>(provider), deviceId);
+        return result ? 0 : fail(nullptr, result.status());
+    } catch (const std::bad_alloc&) {
+        return fail(nullptr, Status::error(ErrorCode::OutOfMemory, "Runtime probe ran out of memory"));
+    } catch (const std::exception& error) {
+        return fail(nullptr, Status::error(ErrorCode::BackendFailure, error.what()));
     }
 }
 
@@ -225,5 +250,12 @@ extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_backend_plugin_query
     api.release_batch = &releaseBatch;
     api.get_last_error = &getLastError;
     *outApi = api;
+    return 0;
+}
+
+extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_backend_query_execution_v1(
+    uint32_t hostAbiVersion, anom_backend_execution_api_v1* outApi) {
+    if (!outApi || hostAbiVersion != 1 || outApi->struct_size < sizeof(*outApi)) return -1;
+    *outApi = {sizeof(*outApi), 1, &createWithProvider, &probe};
     return 0;
 }
