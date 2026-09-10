@@ -399,7 +399,7 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_get_model_info(
 extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_get_execution_info(
     const anom_session_t* session, anom_execution_info_t* outInfo) {
     anomLastError.clear();
-    constexpr std::size_t minimumSize = offsetof(anom_execution_info_t, reserved);
+    constexpr std::size_t minimumSize = offsetof(anom_execution_info_t, faiss_provider);
     if (!session || !outInfo || outInfo->struct_size < minimumSize) {
         return fail(ANOM_STATUS_INVALID_ARGUMENT, "Execution info arguments are invalid");
     }
@@ -415,6 +415,11 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_get_execution_in
     outInfo->precision = publicPrecision(info.precision);
     outInfo->fallback_occurred = info.fallbackOccurred ? 1 : 0;
     outInfo->fallback_reason_utf8 = info.fallbackReason.c_str();
+    if (structSize >= offsetof(anom_execution_info_t, reserved)) {
+        outInfo->faiss_provider = static_cast<int32_t>(info.searchProvider);
+        outInfo->faiss_device_id = info.searchDeviceId;
+        outInfo->faiss_fallback_occurred = info.searchFallbackOccurred ? 1 : 0;
+    }
     return ANOM_STATUS_OK;
 }
 

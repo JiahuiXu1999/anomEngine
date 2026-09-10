@@ -3,6 +3,27 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Consuming reserved words must preserve the ABI of existing SDK clients. */
+struct legacy_execution_info {
+    uint32_t struct_size;
+    anom_device_preference_t requested_device;
+    const char* backend_utf8;
+    const char* execution_provider_utf8;
+    int32_t device_id;
+    const char* device_name_utf8;
+    anom_precision_t precision;
+    int32_t fallback_occurred;
+    const char* fallback_reason_utf8;
+    uint32_t reserved[8];
+};
+#if defined(__cplusplus)
+static_assert(sizeof(struct legacy_execution_info) == sizeof(anom_execution_info_t), "Execution ABI size changed");
+static_assert(offsetof(struct legacy_execution_info, reserved) == offsetof(anom_execution_info_t, faiss_provider), "Execution ABI prefix changed");
+#else
+_Static_assert(sizeof(struct legacy_execution_info) == sizeof(anom_execution_info_t), "Execution ABI size changed");
+_Static_assert(offsetof(struct legacy_execution_info, reserved) == offsetof(anom_execution_info_t, faiss_provider), "Execution ABI prefix changed");
+#endif
+
 #define CHECK(expression) do { \
     if (!(expression)) { \
         fprintf(stderr, "Check failed at line %d: %s\n", __LINE__, #expression); \

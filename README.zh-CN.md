@@ -61,12 +61,13 @@ C 和 C++ 用户统一直接使用这些 C ABI 结构体。
 |---|---|
 | `ANOM_OPENCV_ROOT` | 包含 `OpenCVConfig.cmake` 的目录 |
 | `ANOM_FAISS_ROOT` | FAISS C/C++ 发行包根目录 |
+| `ANOM_FAISS_GPU_ROOT` | 独立的静态 GPU Faiss SDK 根目录，启用 `ANOM_ENABLE_FAISS_GPU` 时需要 |
 | `ANOM_TENSORRT_ROOT` | TensorRT 发行包根目录 |
 | `ANOM_ONNXRUNTIME_ROOT` | ONNX Runtime C/C++ 发行包根目录 |
 
 ## 构建
 
-原有预设会启用全部算法、两个后端、严格警告和测试。此外还提供明确的 `-cpu` 和 `-nvidia` 变体：CPU 预设不需要 TensorRT 或 CUDA；NVIDIA 预设启用 TensorRT，同时启用可选的 ONNX Runtime CUDA 支持，并保留 CPU 回退。配置好所需依赖的查找路径后，运行与平台和部署方式匹配的预设：
+原有预设会启用全部算法、两个后端、严格警告和测试。此外还提供明确的 `-cpu` 和 `-nvidia` 变体：CPU 预设不需要 TensorRT 或 CUDA；NVIDIA 预设启用 TensorRT、ONNX Runtime CUDA 和 GPU Faiss，并支持按加载策略回退到 CPU。GPU Faiss 需要额外的静态 SDK。配置好所需依赖的查找路径后，运行与平台和部署方式匹配的预设：
 
 ```powershell
 cmake --preset windows-msvc-ninja-release
@@ -106,8 +107,10 @@ cmake --build build/local --config Release
 ## 仓库结构
 
 CPU/GPU 选择、运行时探测、回退规则和 ORT CUDA 部署说明见
-[`docs/cpu-gpu-modes.md`](docs/cpu-gpu-modes.md)。GPU 模式当前加速神经网络推理，
-预处理、Faiss 检索和后处理仍在 CPU 上执行。
+[`docs/cpu-gpu-modes.md`](docs/cpu-gpu-modes.md)。GPU 模式支持神经网络推理和
+PatchCore/SPADE 的 Faiss 检索；预处理、特征变换和后处理仍在 CPU。
+Faiss 的独立插件、构建依赖、回退和执行信息见
+[`docs/faiss-cpu-gpu.md`](docs/faiss-cpu-gpu.md)。
 
 | 路径 | 职责 |
 |---|---|

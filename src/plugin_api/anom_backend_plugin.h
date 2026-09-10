@@ -33,6 +33,9 @@ typedef struct anom_backend_config_v1 {
 } anom_backend_config_v1;
 
 typedef struct anom_plugin_tensor_batch_v1 {
+    /* Host-memory views owned by this batch, valid until release_batch even
+     * across later infer calls. The host keeps the instance/DLL alive until
+     * all retained batches have been released. No device pointers here. */
     const anom_plugin_tensor_view_v1* tensors;
     size_t count;
     void* owner;

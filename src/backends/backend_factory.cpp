@@ -37,9 +37,7 @@ public:
                    anom_backend_plugin_api_v1 api, anom_backend_execution_api_v1 execution)
         : library_(std::move(library)), api_(api), execution_(execution) {}
 
-    ~DynamicBackend() override {
-        if (instance_ && api_.destroy) api_.destroy(instance_);
-    }
+    ~DynamicBackend() override = default;
 
     Result<void> load(const BackendConfig& config) override {
         if (config.backend == RuntimeBackend::TensorRT && config.provider == ExecutionProvider::Cpu)
@@ -88,13 +86,19 @@ public:
             return Status::error(pluginErrorCode(created), "Backend plugin creation failed",
                                  message);
         }
+        // Output tensors can outlive this wrapper. Keep both the instance and
+        // the DLL containing its destroy/release callbacks alive with them.
+        instanceLifetime_ = std::shared_ptr<void>(instance,
+            [library = library_, destroy = api_.destroy](void* value) {
+                destroy(value);
+            });
         instance_ = instance;
 
         anom_plugin_signature_v1 view{};
         const int32_t signatureStatus = api_.get_signature(instance_, &view);
         if (signatureStatus != 0) {
             const std::string message = pluginError(api_, instance_);
-            api_.destroy(instance_);
+            instanceLifetime_.reset();
             instance_ = nullptr;
             return Status::error(pluginErrorCode(signatureStatus),
                                  "Backend plugin signature query failed",
@@ -102,14 +106,14 @@ public:
         }
         auto convertedSignature = convertSignature(view);
         if (!convertedSignature) {
-            api_.destroy(instance_);
+            instanceLifetime_.reset();
             instance_ = nullptr;
             return convertedSignature.status();
         }
         signature_ = std::move(convertedSignature.value());
         maxBatchSize_ = api_.get_max_batch_size(instance_);
         if (maxBatchSize_ <= 0) {
-            api_.destroy(instance_);
+            instanceLifetime_.reset();
             instance_ = nullptr;
             return Status::error(ErrorCode::BackendFailure,
                                  "Backend plugin returned an invalid maximum batch size");
@@ -156,10 +160,24 @@ public:
             ~BatchGuard() { if (batch->owner) api->release_batch(batch); }
         } guard{&api_, &batch};
 
+        struct SharedBatch {
+            std::shared_ptr<void> instanceLifetime;
+            decltype(anom_backend_plugin_api_v1::release_batch) release{nullptr};
+            anom_plugin_tensor_batch_v1 batch{};
+            ~SharedBatch() { if (batch.owner) release(&batch); }
+        };
+        // Allocate before transferring ownership so an allocation failure still
+        // releases the plugin batch through guard.
+        auto owner = std::make_shared<SharedBatch>();
+        owner->instanceLifetime = instanceLifetime_;
+        owner->release = api_.release_batch;
+        owner->batch = batch;
+        batch = {};
+
         TensorMap result;
-        result.reserve(batch.count);
-        for (std::size_t i = 0; i < batch.count; ++i) {
-            const auto& view = batch.tensors[i];
+        result.reserve(owner->batch.count);
+        for (std::size_t i = 0; i < owner->batch.count; ++i) {
+            const auto& view = owner->batch.tensors[i];
             if (!view.name_utf8 || view.data_type < static_cast<int32_t>(DataType::Float32) ||
                 view.data_type > static_cast<int32_t>(DataType::Bool) ||
                 (view.rank != 0 && !view.dimensions) ||
@@ -171,9 +189,7 @@ public:
             tensor.dtype = static_cast<DataType>(view.data_type);
             if (view.rank != 0)
                 tensor.shape.dims.assign(view.dimensions, view.dimensions + view.rank);
-            tensor.bytes.resize(view.byte_size);
-            if (view.byte_size != 0)
-                std::memcpy(tensor.bytes.data(), view.data, view.byte_size);
+            tensor.setExternalView(view.data, view.byte_size, owner);
             result.emplace(view.name_utf8, std::move(tensor));
         }
         return result;
@@ -220,6 +236,7 @@ private:
     std::shared_ptr<plugins::DynamicLibrary> library_;
     anom_backend_plugin_api_v1 api_{};
     anom_backend_execution_api_v1 execution_{};
+    std::shared_ptr<void> instanceLifetime_;
     void* instance_{nullptr};
     TensorSignature signature_;
     int maxBatchSize_{0};

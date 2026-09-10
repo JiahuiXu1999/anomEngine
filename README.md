@@ -75,6 +75,7 @@ listed below, and follow each dependency's own license terms.
 |---|---|
 | `ANOM_OPENCV_ROOT` | Directory containing `OpenCVConfig.cmake` |
 | `ANOM_FAISS_ROOT` | FAISS C/C++ distribution root |
+| `ANOM_FAISS_GPU_ROOT` | Separate static GPU Faiss SDK; required with `ANOM_ENABLE_FAISS_GPU` |
 | `ANOM_TENSORRT_ROOT` | TensorRT distribution root |
 | `ANOM_ONNXRUNTIME_ROOT` | ONNX Runtime C/C++ distribution root |
 
@@ -83,7 +84,9 @@ listed below, and follow each dependency's own license terms.
 The original presets enable all algorithms, both backends, strict warnings, and
 tests. Explicit `-cpu` and `-nvidia` variants are also available; CPU presets do
 not require TensorRT or CUDA, while NVIDIA presets enable TensorRT alongside the
-optional ONNX Runtime CUDA support and CPU fallback. After making the required dependencies discoverable, run
+optional ONNX Runtime CUDA and GPU Faiss support, with permitted CPU fallback.
+GPU Faiss requires its own static SDK; see [Faiss CPU/GPU modes](docs/faiss-cpu-gpu.md).
+After making the required dependencies discoverable, run
 the preset matching your platform and deployment:
 
 ```powershell

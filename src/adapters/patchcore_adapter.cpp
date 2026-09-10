@@ -1,6 +1,7 @@
 #include "adapters/patchcore_adapter.h"
 
 #include "adapters/feature_utils.h"
+#include "retrieval/faiss_index.h"
 
 #include <faiss/Index.h>
 #include <faiss/index_io.h>
@@ -49,8 +50,13 @@ public:
             return Status::error(ErrorCode::ArtifactCorrupt,
                                  "PatchCore adapter currently requires a FAISS L2 index");
         }
-        index_ = std::move(candidate);
+        index_ = std::make_unique<FaissIndex>(std::move(candidate), path.value());
         return {};
+    }
+
+    Result<SearchExecutionInfo> configureSearch(const SearchExecutionConfig& config) {
+        if (!index_) return Status::error(ErrorCode::NotInitialized, "PatchCore index is not loaded");
+        return configureFaissIndexes({index_.get()}, config, config_.numNeighbors);
     }
 
     Result<void> validateSignature(const TensorSignature& signature) const {
@@ -222,7 +228,7 @@ public:
 private:
     PatchCoreConfig config_;
     std::unordered_map<std::string, std::string> outputBindings_;
-    std::unique_ptr<faiss::Index> index_;
+    std::unique_ptr<FaissIndex> index_;
 };
 
 PatchCoreAdapter::PatchCoreAdapter(PatchCoreConfig config,
@@ -230,6 +236,9 @@ PatchCoreAdapter::PatchCoreAdapter(PatchCoreConfig config,
     : impl_(std::make_unique<Impl>(std::move(config), std::move(bindings))) {}
 PatchCoreAdapter::~PatchCoreAdapter() = default;
 Result<void> PatchCoreAdapter::loadAssets(const ModelPackage& package) { return impl_->loadAssets(package); }
+Result<SearchExecutionInfo> PatchCoreAdapter::configureSearch(const SearchExecutionConfig& config) {
+    return impl_->configureSearch(config);
+}
 Result<void> PatchCoreAdapter::validateSignature(const TensorSignature& signature) const { return impl_->validateSignature(signature); }
 Result<RawPredictionBatch> PatchCoreAdapter::predict(const TensorMap& outputs,
                                                      const cv::Size& modelInputSize) const {

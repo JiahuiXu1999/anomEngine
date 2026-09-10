@@ -45,6 +45,32 @@ typedef int32_t (ANOM_PLUGIN_CALL *anom_algorithm_plugin_query_v1_fn)(
     uint32_t host_abi_version,
     anom_algorithm_plugin_api_v1* out_api);
 
+/* Optional extension; keeps the original algorithm plugin ABI unchanged.
+ * Provider: 0 = no Faiss stage (output only), 1 = CPU, 2 = CUDA.
+ * Configure only during load. Prediction never changes provider. */
+typedef struct anom_search_config_v1 {
+    uint32_t struct_size;
+    int32_t provider;
+    int32_t device_id;
+    int32_t allow_cpu_fallback;
+    const char* plugin_directory_utf8;
+} anom_search_config_v1;
+typedef struct anom_search_info_v1 {
+    uint32_t struct_size;
+    int32_t provider;
+    int32_t device_id;
+    int32_t fallback_occurred;
+    const char* fallback_reason_utf8;
+} anom_search_info_v1;
+typedef struct anom_algorithm_execution_api_v1 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    int32_t (ANOM_PLUGIN_CALL *configure_search)(void* instance,
+        const anom_search_config_v1* config, anom_search_info_v1* info);
+} anom_algorithm_execution_api_v1;
+typedef int32_t (ANOM_PLUGIN_CALL *anom_algorithm_query_execution_v1_fn)(
+    uint32_t version, anom_algorithm_execution_api_v1* api);
+
 #ifdef __cplusplus
 }
 #endif

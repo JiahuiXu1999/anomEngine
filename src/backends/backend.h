@@ -1,7 +1,7 @@
 #pragma once
 
 #include "model/result.h"
-#include "model/types.h"
+#include "model/runtime_types.h"
 
 #include <memory>
 
@@ -38,6 +38,9 @@ public:
     virtual Result<void> load(const BackendConfig& config) = 0;
     // Probes runtime/device availability, not compatibility with a model.
     virtual Result<void> probe(ExecutionProvider provider, int deviceId) = 0;
+    // Outputs may be immutable host-memory views. Read via const Tensor::data()
+    // and byteSize(), not bytes. Their shared owners retain storage across later
+    // inference calls and destruction of the backend wrapper.
     virtual Result<TensorMap> infer(const TensorMap& inputs) = 0;
     [[nodiscard]] virtual const TensorSignature& signature() const noexcept = 0;
     [[nodiscard]] virtual int maxBatchSize() const noexcept = 0;

@@ -260,6 +260,20 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
         auto adapterValid = adapter.value()->validateSignature(backend.value()->signature());
         if (!adapterValid) return adapterValid.status();
 
+        SearchExecutionConfig searchConfig;
+        searchConfig.provider = candidate.provider;
+        searchConfig.deviceId = selectedConfig.deviceId;
+        searchConfig.allowCpuFallback = options.devicePreference == DevicePreference::Auto ||
+                                       options.fallbackPolicy == FallbackPolicy::LoadOnly;
+        searchConfig.pluginDirectory = options.pluginDirectory;
+        auto search = adapter.value()->configureSearch(searchConfig);
+        if (!search) {
+            lastFailure = search.status();
+            attempts.push_back(std::string(candidateName(candidate)) + " Faiss: " + lastFailure.describe());
+            if (!retryableSearchFailure(lastFailure.code)) return lastFailure;
+            continue;
+        }
+
         auto session = std::unique_ptr<InferenceSession>(
             new InferenceSession(package.value(), std::move(backend.value()),
                                  std::move(adapter.value())));
@@ -277,6 +291,14 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
                 ? PrecisionPreference::Float16 : PrecisionPreference::Float32;
         session->executionInfo_.fallbackOccurred = !attempts.empty();
         session->executionInfo_.fallbackReason = joinAttempts(attempts);
+        session->executionInfo_.searchProvider = search.value().provider;
+        session->executionInfo_.searchDeviceId = search.value().deviceId;
+        session->executionInfo_.searchFallbackOccurred = search.value().fallbackOccurred;
+        if (search.value().fallbackOccurred) {
+            session->executionInfo_.fallbackOccurred = true;
+            if (!session->executionInfo_.fallbackReason.empty()) session->executionInfo_.fallbackReason += " | ";
+            session->executionInfo_.fallbackReason += "Faiss CUDA -> CPU: " + search.value().fallbackReason;
+        }
 
         if (options.warmup) {
             auto warmed = session->warmup();

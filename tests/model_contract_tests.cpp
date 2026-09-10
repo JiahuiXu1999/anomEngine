@@ -164,6 +164,22 @@ void testPreprocessorAndPooling() {
             "Average pooling result is incorrect");
 }
 
+void verifyFaissDevicePolicy(IModelAdapter& adapter) {
+    SearchExecutionConfig config;
+    config.deviceId = 123456; // deterministic unavailability, independent of CI hardware
+    auto cpu = adapter.configureSearch(config);
+    require(cpu.ok() && cpu.value().provider == ExecutionProvider::Cpu && !cpu.value().fallbackOccurred,
+            "Algorithm plugin did not select CPU Faiss");
+    config.provider = ExecutionProvider::Cuda;
+    auto strict = adapter.configureSearch(config);
+    require(!strict, "Algorithm plugin silently accepted an unavailable GPU Faiss device");
+    config.allowCpuFallback = true;
+    auto fallback = adapter.configureSearch(config);
+    require(fallback.ok() && fallback.value().provider == ExecutionProvider::Cpu &&
+                fallback.value().fallbackOccurred && !fallback.value().fallbackReason.empty(),
+            "Algorithm plugin did not propagate Faiss CPU fallback diagnostics");
+}
+
 void testPatchCoreAdapter(const fs::path& root) {
     faiss::IndexFlatL2 index(1);
     const float bank = 0.0F;
@@ -185,6 +201,7 @@ void testPatchCoreAdapter(const fs::path& root) {
     require(package.ok(), package.status().describe());
     auto adapter = createAdapter(package.value());
     require(adapter.ok(), adapter.status().describe());
+    verifyFaissDevicePolicy(*adapter.value());
 
     TensorSignature validSignature;
     validSignature.outputs.push_back({"feature", DataType::Float32, {{-1, 1, 1, 1}}, false});
@@ -671,6 +688,7 @@ void testSPADE(const fs::path& root) {
     require(package.ok(), package.status().describe());
     auto adapter = createAdapter(package.value());
     require(adapter.ok(), adapter.status().describe());
+    verifyFaissDevicePolicy(*adapter.value());
 
     TensorSignature signature;
     signature.outputs.push_back({"f", DataType::Float32, {{-1, 1, 1, 1}}, false});

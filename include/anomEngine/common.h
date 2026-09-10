@@ -100,8 +100,10 @@ enum {
  * ONNX Runtime/CUDA, then ONNX Runtime/CPU, subject to available artifacts.
  * A non-empty backend_utf8 constrains selection to "tensorrt" or "onnxruntime".
  * CPU never initializes CUDA. GPU requires a GPU inference provider unless
- * LOAD_ONLY fallback is enabled. Preprocessing, adapters and postprocessing
- * currently execute on CPU. AUTO allows CPU selection even with FALLBACK_NONE.
+ * LOAD_ONLY fallback is enabled. PatchCore/SPADE Faiss retrieval follows the
+ * selected device, allowing independent CPU fallback with AUTO or LOAD_ONLY.
+ * Preprocessing, feature transforms and postprocessing currently run on CPU.
+ * AUTO allows CPU selection even with FALLBACK_NONE.
  * Selection is fixed after load/warmup; predict never retries on another device.
  */
 typedef struct anom_algorithm_options {
@@ -209,8 +211,19 @@ typedef struct anom_execution_info {
     anom_precision_t precision;
     int32_t fallback_occurred;
     const char* fallback_reason_utf8;
-    uint32_t reserved[8];
+    /* Uses three former reserved words; structure size and prior fields unchanged.
+     * 0 = no Faiss stage, 1 = CPU, 2 = CUDA. Neural runtime fields above are separate. */
+    int32_t faiss_provider;
+    int32_t faiss_device_id; /* -1 unless CUDA */
+    int32_t faiss_fallback_occurred;
+    uint32_t reserved[5];
 } anom_execution_info_t;
+
+enum {
+    ANOM_FAISS_NONE = 0,
+    ANOM_FAISS_CPU = 1,
+    ANOM_FAISS_CUDA = 2
+};
 
 typedef struct anom_model_validate_options {
     uint32_t struct_size;

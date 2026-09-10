@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace anom::model;
@@ -61,7 +62,17 @@ void testIdentityModel() {
     const auto found = outputs.value().find("output");
     require(found != outputs.value().end(), "Identity output is missing");
     require(found->second.shape.dims == input.shape.dims, "Dynamic output shape is wrong");
-    require(found->second.bytes == input.bytes, "Identity output values are wrong");
+    const Tensor& output = found->second;
+    require(output.byteSize() == input.byteSize() &&
+                std::memcmp(output.data<std::byte>(), input.bytes.data(), input.byteSize()) == 0,
+            "Identity output values are wrong");
+    require(output.bytes.empty() && output.externalOwner,
+            "Backend output was copied instead of retaining the plugin batch");
+    Tensor retained = output;
+    auto next = backend.value()->infer(inputs);
+    require(next.ok(), next.status().describe());
+    require(std::memcmp(std::as_const(retained).data<std::byte>(), input.bytes.data(), input.byteSize()) == 0,
+            "A later inference invalidated an earlier output");
 
     TensorMap missing;
     auto rejected = backend.value()->infer(missing);
@@ -77,6 +88,11 @@ void testIdentityModel() {
     require(!rejected && rejected.status().code == ErrorCode::TensorShapeMismatch,
             "Static ONNX dimension mismatch was not rejected");
 
+    outputs.value().clear();
+    next.value().clear();
+    backend.value().reset();
+    require(std::memcmp(std::as_const(retained).data<std::byte>(), input.bytes.data(), input.byteSize()) == 0,
+            "Output did not survive backend destruction");
 }
 
 void testLegacyPluginProviderNegotiation() {

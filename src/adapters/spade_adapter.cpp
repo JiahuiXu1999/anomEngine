@@ -1,6 +1,7 @@
 #include "adapters/spade_adapter.h"
 
 #include "adapters/feature_utils.h"
+#include "retrieval/faiss_index.h"
 
 #include <faiss/Index.h>
 #include <faiss/index_io.h>
@@ -48,9 +49,15 @@ public:
                                      "SPADE index contains fewer vectors than num_neighbors",
                                      std::to_string(candidate->ntotal));
             }
-            indexes_.push_back(std::move(candidate));
+            indexes_.push_back(std::make_unique<FaissIndex>(std::move(candidate), path.value()));
         }
         return {};
+    }
+
+    Result<SearchExecutionInfo> configureSearch(const SearchExecutionConfig& config) {
+        std::vector<FaissIndex*> indexes;
+        for (auto& index : indexes_) indexes.push_back(index.get());
+        return configureFaissIndexes(indexes, config, config_.numNeighbors);
     }
 
     Result<void> validateSignature(const TensorSignature& signature) const {
@@ -122,6 +129,9 @@ public:
                 auto view = feature::viewNchwFloat(tensor->second, "SPADE feature");
                 const int locations = view.value().height * view.value().width;
                 const int channels = view.value().channels;
+                if (channels != indexes_[i]->dimension())
+                    return Status::error(ErrorCode::TensorShapeMismatch,
+                                         "SPADE feature channels do not match Faiss index dimension");
                 const std::vector<float> patches = feature::flattenPatches(tensor->second);
                 const float* queries = patches.data() +
                     static_cast<std::size_t>(n) * locations * channels;
@@ -170,7 +180,7 @@ public:
 private:
     SPADEConfig config_;
     std::unordered_map<std::string, std::string> outputBindings_;
-    std::vector<std::unique_ptr<faiss::Index>> indexes_;
+    std::vector<std::unique_ptr<FaissIndex>> indexes_;
 };
 
 SpadeAdapter::SpadeAdapter(SPADEConfig config,
@@ -178,6 +188,9 @@ SpadeAdapter::SpadeAdapter(SPADEConfig config,
     : impl_(std::make_unique<Impl>(std::move(config), std::move(outputBindings))) {}
 SpadeAdapter::~SpadeAdapter() = default;
 Result<void> SpadeAdapter::loadAssets(const ModelPackage& package) { return impl_->loadAssets(package); }
+Result<SearchExecutionInfo> SpadeAdapter::configureSearch(const SearchExecutionConfig& config) {
+    return impl_->configureSearch(config);
+}
 Result<void> SpadeAdapter::validateSignature(const TensorSignature& signature) const {
     return impl_->validateSignature(signature);
 }

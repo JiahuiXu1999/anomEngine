@@ -18,6 +18,7 @@ public:
     SpadeAdapter& operator=(const SpadeAdapter&) = delete;
 
     Result<void> loadAssets(const ModelPackage& package) override;
+    Result<SearchExecutionInfo> configureSearch(const SearchExecutionConfig& config) override;
     Result<void> validateSignature(const TensorSignature& signature) const override;
     Result<RawPredictionBatch> predict(const TensorMap& outputs,
                                        const cv::Size& modelInputSize) const override;

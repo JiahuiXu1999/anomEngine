@@ -59,6 +59,8 @@ int main(int argc, char** argv) {
         loaded = cpu.value()->load(config);
         require(loaded.ok(), loaded.status().describe());
 
+        Tensor retainedGpuOutput;
+        Tensor retainedCpuOutput;
         for (int batch : {2, 1, 4, 1}) {
             auto input = inputs(batch);
             auto expected = cpu.value()->infer(input);
@@ -68,11 +70,22 @@ int main(int argc, char** argv) {
             require(actual.ok(), actual.status().describe());
             const auto& reference = expected.value().at("output");
             const auto& output = actual.value().at("output");
-            require(reference.shape.dims == output.shape.dims && reference.bytes == output.bytes,
+            require(reference.shape.dims == output.shape.dims &&
+                        reference.byteSize() == output.byteSize() &&
+                        std::memcmp(reference.data<std::byte>(), output.data<std::byte>(), output.byteSize()) == 0,
                     "CPU/GPU dynamic-batch identity results differ");
+            retainedGpuOutput = output;
+            retainedCpuOutput = reference;
         }
-        // Destruction must also select the owning device on a different thread.
+        // Retained outputs keep the instance/DLL alive beyond the wrapper.
         std::async(std::launch::async, [runtime = std::move(gpu.value())]() mutable { runtime.reset(); }).get();
+        require(retainedGpuOutput.byteSize() == retainedCpuOutput.byteSize() &&
+                    std::memcmp(std::as_const(retainedGpuOutput).data<std::byte>(),
+                                std::as_const(retainedCpuOutput).data<std::byte>(),
+                                retainedGpuOutput.byteSize()) == 0,
+                "Retained GPU output changed after wrapper destruction");
+        // Final batch and instance destruction must select the owning device.
+        std::async(std::launch::async, [tensor = std::move(retainedGpuOutput)]() mutable { tensor = {}; }).get();
         std::cout << argv[1] << " CUDA parity and cross-thread lifetime checks passed\n";
         return 0;
     } catch (const std::exception& error) {

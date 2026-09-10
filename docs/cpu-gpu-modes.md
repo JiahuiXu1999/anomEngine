@@ -2,8 +2,9 @@
 
 The algorithm objects share the same C ABI in both modes. Device selection is a
 load-time policy; the backend and provider are separate internal choices. GPU
-means GPU neural-network inference. Preprocessing, feature transforms, Faiss
-retrieval and postprocessing currently remain on CPU, and backend tensor outputs
+means GPU neural-network inference and, for PatchCore/SPADE, GPU Faiss retrieval
+unless permitted loading fallback selects CPU. Preprocessing, feature transforms
+and postprocessing currently remain on CPU, and backend tensor outputs
 are returned in host memory. ORT may also assign unsupported graph nodes to CPU.
 Selecting CUDA is not a guarantee that every graph node executes on GPU.
 
@@ -89,9 +90,9 @@ provider is absent, and CPU execution remains available.
 
 ## Build and deployment
 
-- `*-cpu` presets explicitly disable TensorRT and ORT CUDA. No CUDA Toolkit is
+- `*-cpu` presets explicitly disable TensorRT, ORT CUDA and GPU Faiss. No CUDA Toolkit is
   required. Use a CPU ORT distribution for a minimal deployment.
-- `*-nvidia` presets enable TensorRT and `ANOM_ENABLE_ORT_CUDA`. Install a GPU ORT
+- `*-nvidia` presets enable TensorRT, `ANOM_ENABLE_ORT_CUDA` and `ANOM_ENABLE_FAISS_GPU`. Install a GPU ORT
   distribution to use ORT CUDA, with the CUDA/cuDNN versions required by that
   distribution. Enabling this flag alone does not install a CUDA provider.
 - ORT CUDA can be enabled independently of TensorRT:
@@ -105,7 +106,9 @@ provider is absent, and CPU execution remains available.
 
 ## Plugin compatibility and threading
 
-Public ABI v3 structures and the original backend plugin v1 ABI are unchanged.
+Public ABI v3 structure sizes and existing field offsets are unchanged. Three
+execution-info reserved words now report `faiss_provider`, `faiss_device_id` and
+`faiss_fallback_occurred`. The original backend plugin v1 ABI is unchanged.
 Backends optionally export `anom_backend_query_execution_v1`, which negotiates a
 separate function table for explicit provider creation and device probing. A new
 host still loads a legacy plugin in its original default mode. It rejects ORT CUDA
@@ -130,10 +133,47 @@ destroys a GPU backend on host threads different from its loading thread. CTest
 reports hardware/provider-dependent tests as skipped (code 77) when unavailable;
 once a runtime/device passes probing, load and inference failures fail the test.
 
-Device-resident tensors, GPU Faiss and GPU preprocessing are separate extensions
-to this mode-selection work. They require an explicit device-memory and stream
+GPU Faiss is provided by the optional `anom_search_faiss_cuda` plugin, with host
+query/result buffers. See [Faiss CPU/GPU modes](faiss-cpu-gpu.md) for dependency,
+fallback and verification details. Device-resident tensors and GPU preprocessing
+remain separate extensions. They require an explicit device-memory and stream
 contract across both algorithm and backend plugins; the current host tensor ABI
 must not be used to pass device pointers.
+
+## Host output ownership and copy cost
+
+Backend plugin outputs are consumed as shared, read-only host-memory views.
+The host no longer allocates and copies the complete output tensor batch when
+crossing the backend plugin boundary. This applies to both TensorRT and ORT:
+an output batch totaling N bytes avoids one N-byte host allocation/copy at that
+boundary (N bytes read and N bytes written). This is not a claim about measured
+end-to-end speedup, which depends on the model and the other pipeline stages.
+
+Each retained Tensor shares ownership of the plugin batch, backend instance and
+loaded DLL. The last owner releases the batch before destroying the instance or
+unloading the DLL, including when the wrapper was already destroyed or the final
+tensor is released on another thread. Later inference calls do not overwrite
+retained outputs. Consumers read via const `Tensor::data()` and `byteSize()`;
+`bytes` can be empty for an external view. Mutable `data()` access creates a
+private copy so it cannot change another consumer's shared output.
+
+TensorRT still performs device-to-host output transfers. ORT still copies its
+runtime output into a host Tensor, and preprocessing, feature transforms
+and postprocessing still run on CPU. GPU Faiss uploads the flattened CPU features
+and returns distances/labels to CPU. The existing `backendMs` includes inference,
+transfers and backend/plugin handling; compare it with `adapterMs` and `totalMs`
+on production models before deciding the next GPU optimization.
+
+`backend_memory_tests` verifies pointer identity on a 4 MiB feature output,
+copy-on-write, retained results across inference calls, malformed/empty batch
+cleanup, and cross-thread instance/DLL lifetime. It is part of the normal CTest
+suite and can also run without OpenCV, ORT, Faiss or CUDA:
+
+```sh
+cmake -S tests/backend_memory -B build/backend-memory
+cmake --build build/backend-memory --config Release
+ctest --test-dir build/backend-memory -C Release --output-on-failure
+```
 
 The ORT provider setup follows the official
 [CUDA provider configuration](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html),

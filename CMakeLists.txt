@@ -27,6 +27,7 @@ endif()
 option(ANOM_ENABLE_TENSORRT "Build the TensorRT backend plugin" ON)
 option(ANOM_ENABLE_ONNXRUNTIME "Build the ONNX Runtime backend plugin" ON)
 option(ANOM_ENABLE_ORT_CUDA "Allow the ONNX Runtime plugin to use its optional CUDA provider" OFF)
+option(ANOM_ENABLE_FAISS_GPU "Build the optional GPU Faiss retrieval plugin" OFF)
 if(ANOM_ENABLE_ORT_CUDA AND NOT ANOM_ENABLE_ONNXRUNTIME)
     message(FATAL_ERROR "ANOM_ENABLE_ORT_CUDA requires ANOM_ENABLE_ONNXRUNTIME")
 endif()
@@ -126,7 +127,7 @@ else()
 endif()
 
 set(ANOM_NEEDS_FAISS OFF)
-if(ANOM_BUILD_ALGO_PATCHCORE OR ANOM_BUILD_ALGO_SPADE OR BUILD_TESTING)
+if(ANOM_BUILD_ALGO_PATCHCORE OR ANOM_BUILD_ALGO_SPADE OR BUILD_TESTING OR ANOM_ENABLE_FAISS_GPU)
     set(ANOM_NEEDS_FAISS ON)
 endif()
 
@@ -320,6 +321,11 @@ anom_apply_project_defaults(anom_engine)
 
 # Dynamically loaded algorithm plugins -----------------------------------------
 
+set(ANOM_FAISS_SEARCH_SOURCES
+    "${ANOM_PRIVATE_SOURCE_ROOT}/retrieval/faiss_index.cpp"
+    "${ANOM_PRIVATE_SOURCE_ROOT}/retrieval/gpu_faiss_client.cpp"
+    "${ANOM_PRIVATE_SOURCE_ROOT}/plugins/dynamic_library.cpp")
+
 set(ANOM_PLUGIN_CONTRACT_SOURCES
     "${ANOM_PRIVATE_SOURCE_ROOT}/infrastructure/json.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/infrastructure/sha256.cpp"
@@ -366,14 +372,14 @@ endif()
 if(ANOM_BUILD_ALGO_PATCHCORE)
     anom_add_algorithm(patchcore ANOM_ALGORITHM_PATCHCORE
         "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/patchcore_adapter.cpp"
-        "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/feature_utils.cpp")
-    target_link_libraries(anom_algo_patchcore PRIVATE anom::faiss anom::faiss_c)
+        "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/feature_utils.cpp" ${ANOM_FAISS_SEARCH_SOURCES})
+    target_link_libraries(anom_algo_patchcore PRIVATE anom::faiss anom::faiss_c ${CMAKE_DL_LIBS})
 endif()
 if(ANOM_BUILD_ALGO_SPADE)
     anom_add_algorithm(spade ANOM_ALGORITHM_SPADE
         "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/spade_adapter.cpp"
-        "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/feature_utils.cpp")
-    target_link_libraries(anom_algo_spade PRIVATE anom::faiss anom::faiss_c)
+        "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/feature_utils.cpp" ${ANOM_FAISS_SEARCH_SOURCES})
+    target_link_libraries(anom_algo_spade PRIVATE anom::faiss anom::faiss_c ${CMAKE_DL_LIBS})
 endif()
 if(ANOM_BUILD_ALGO_YOLO)
     anom_add_algorithm(yolo ANOM_ALGORITHM_YOLO
@@ -421,6 +427,46 @@ if(ANOM_ENABLE_ONNXRUNTIME)
 endif()
 
 # Tests ------------------------------------------------------------------------
+
+set(ANOM_SEARCH_TARGETS "")
+if(ANOM_ENABLE_FAISS_GPU)
+    # A separate static GPU SDK avoids loading a CUDA-dependent faiss.dll into
+    # the CPU algorithm plugins (or colliding with their CPU faiss.dll).
+    set(ANOM_FAISS_GPU_ROOT "${ANOM_BUNDLED_DEPENDENCY_ROOT}/faiss-gpu" CACHE PATH
+        "Static GPU-enabled Faiss SDK, separate from the CPU Faiss distribution")
+    anom_assert_absolute_path(ANOM_FAISS_GPU_ROOT)
+    find_path(ANOM_FAISS_GPU_INCLUDE_DIR faiss/gpu/StandardGpuResources.h
+        PATHS "${ANOM_FAISS_GPU_ROOT}/include" NO_DEFAULT_PATH)
+    find_file(ANOM_FAISS_GPU_LIBRARY NAMES faiss.lib libfaiss.a
+        PATHS "${ANOM_FAISS_GPU_ROOT}/lib" "${ANOM_FAISS_GPU_ROOT}/lib64" NO_DEFAULT_PATH)
+    if(NOT ANOM_FAISS_GPU_INCLUDE_DIR OR NOT ANOM_FAISS_GPU_LIBRARY)
+        message(FATAL_ERROR "GPU Faiss requires a static GPU-enabled SDK. Set ANOM_FAISS_GPU_ROOT (CPU Faiss is insufficient).")
+    endif()
+    if(WIN32)
+        # An import library would pull a second faiss.dll into the process and
+        # defeat CPU/GPU dependency isolation. Reject it even if the DLL itself
+        # was omitted from the SDK directory.
+        file(STRINGS "${ANOM_FAISS_GPU_LIBRARY}" _anom_faiss_gpu_imports REGEX "[Ff][Aa][Ii][Ss][Ss].*\\.[Dd][Ll][Ll]")
+        if(_anom_faiss_gpu_imports)
+            message(FATAL_ERROR "ANOM_FAISS_GPU_LIBRARY must be a static library, not a Faiss DLL import library.")
+        endif()
+    endif()
+    find_package(CUDAToolkit REQUIRED)
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
+    find_package(BLAS REQUIRED)
+    find_package(LAPACK REQUIRED)
+    add_library(anom_search_faiss_cuda MODULE "${ANOM_PRIVATE_SOURCE_ROOT}/plugins/faiss_cuda_plugin.cpp")
+    target_include_directories(anom_search_faiss_cuda PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}")
+    target_include_directories(anom_search_faiss_cuda SYSTEM PRIVATE "${ANOM_FAISS_GPU_INCLUDE_DIR}")
+    target_link_libraries(anom_search_faiss_cuda PRIVATE "${ANOM_FAISS_GPU_LIBRARY}"
+        CUDA::cudart CUDA::cublas OpenMP::OpenMP_CXX ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES})
+    if(UNIX AND NOT APPLE)
+        target_link_options(anom_search_faiss_cuda PRIVATE "-Wl,-Bsymbolic" "-Wl,--exclude-libs,ALL")
+    endif()
+    set_target_properties(anom_search_faiss_cuda PROPERTIES PREFIX "" INSTALL_RPATH "${ANOM_ORIGIN_RPATH}")
+    anom_apply_project_defaults(anom_search_faiss_cuda)
+    list(APPEND ANOM_SEARCH_TARGETS anom_search_faiss_cuda)
+endif()
 
 if(BUILD_TESTING)
     add_subdirectory(tests/object_api)
@@ -502,6 +548,11 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+if(BUILD_TESTING)
+    add_subdirectory(tests/backend_memory)
+    add_subdirectory(tests/faiss_runtime)
+endif()
+
 # Installation and Windows runtime deployment ---------------------------------
 
 install(TARGETS anom_engine
@@ -509,7 +560,7 @@ install(TARGETS anom_engine
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 
-set(ANOM_PLUGIN_TARGETS ${ANOM_ALGORITHM_TARGETS} ${ANOM_BACKEND_TARGETS})
+set(ANOM_PLUGIN_TARGETS ${ANOM_ALGORITHM_TARGETS} ${ANOM_BACKEND_TARGETS} ${ANOM_SEARCH_TARGETS})
 if(ANOM_PLUGIN_TARGETS)
     if(WIN32)
         set(ANOM_PLUGIN_INSTALL_DIRECTORY "${CMAKE_INSTALL_BINDIR}")

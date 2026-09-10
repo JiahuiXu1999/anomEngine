@@ -36,6 +36,7 @@ thread_local std::string globalError;
 
 struct Instance {
     std::unique_ptr<IModelAdapter> adapter;
+    SearchExecutionInfo searchInfo;
     std::string lastError;
 };
 
@@ -246,7 +247,41 @@ size_t ANOM_PLUGIN_CALL getLastError(void* opaque, char* buffer, size_t bufferSi
     return required;
 }
 
+int32_t ANOM_PLUGIN_CALL configureSearch(void* opaque, const anom_search_config_v1* config,
+                                        anom_search_info_v1* info) {
+    auto* instance = static_cast<Instance*>(opaque);
+    if (!instance || !config || !info || config->struct_size < sizeof(*config) ||
+        info->struct_size < sizeof(*info) || (config->provider != 1 && config->provider != 2) ||
+        config->device_id < 0)
+        return fail(instance, Status::error(ErrorCode::InvalidArgument, "Invalid search configuration"));
+    try {
+        SearchExecutionConfig converted;
+        converted.provider = static_cast<ExecutionProvider>(config->provider);
+        converted.deviceId = config->device_id;
+        converted.allowCpuFallback = config->allow_cpu_fallback != 0;
+        if (config->plugin_directory_utf8) converted.pluginDirectory = pathFromUtf8(config->plugin_directory_utf8);
+        auto configured = instance->adapter->configureSearch(converted);
+        if (!configured) return fail(instance, configured.status());
+        instance->searchInfo = std::move(configured.value());
+        const auto& selected = instance->searchInfo;
+        *info = {sizeof(*info), static_cast<int32_t>(selected.provider), selected.deviceId,
+                 selected.fallbackOccurred ? 1 : 0, selected.fallbackReason.c_str()};
+        instance->lastError.clear();
+        return 0;
+    } catch (const std::bad_alloc&) {
+        return fail(instance, Status::error(ErrorCode::OutOfMemory, "Out of memory configuring Faiss"));
+    } catch (const std::exception& error) {
+        return fail(instance, Status::error(ErrorCode::InternalError, "Faiss configuration failed", error.what()));
+    }
+}
 }  // namespace
+
+extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_algorithm_query_execution_v1(
+    uint32_t version, anom_algorithm_execution_api_v1* api) {
+    if (version != 1 || !api || api->struct_size < sizeof(*api)) return -1;
+    *api = {sizeof(*api), 1, &configureSearch};
+    return 0;
+}
 
 extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_algorithm_plugin_query_v1(
     uint32_t hostAbiVersion, anom_algorithm_plugin_api_v1* outApi) {

@@ -132,6 +132,9 @@ void testExecutionSelectionCAbi() {
             "CPU execution info is inconsistent");
     require(execution.precision == ANOM_PRECISION_FP32,
             "CPU execution precision is wrong");
+    require(execution.faiss_provider == ANOM_FAISS_NONE && execution.faiss_device_id == -1 &&
+                execution.faiss_fallback_occurred == 0,
+            "Direct algorithm incorrectly reported a Faiss stage");
     direct.release(&direct);
 
     options.backend_utf8 = "tensorrt";
