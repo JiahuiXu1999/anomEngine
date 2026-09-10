@@ -642,6 +642,8 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_runtime_probe(
         else return fail(ANOM_STATUS_INVALID_ARGUMENT, "Provider must be cpu or cuda");
         if (*backend == RuntimeBackend::TensorRT && provider == anom::model::ExecutionProvider::Cpu)
             return fail(ANOM_STATUS_INVALID_ARGUMENT, "TensorRT requires the CUDA provider");
+        if (*backend == RuntimeBackend::OnnxRuntime && provider == anom::model::ExecutionProvider::Cuda)
+            return fail(ANOM_STATUS_INVALID_ARGUMENT, "ONNX Runtime requires the CPU provider");
         LoadOptions options;
         const auto directory = setPluginDirectory(pluginDirectory, options);
         if (directory != ANOM_STATUS_OK) return directory;

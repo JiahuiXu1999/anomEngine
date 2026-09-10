@@ -42,6 +42,8 @@ public:
     Result<void> load(const BackendConfig& config) override {
         if (config.backend == RuntimeBackend::TensorRT && config.provider == ExecutionProvider::Cpu)
             return Status::error(ErrorCode::InvalidArgument, "TensorRT requires the CUDA provider");
+        if (config.backend == RuntimeBackend::OnnxRuntime && config.provider == ExecutionProvider::Cuda)
+            return Status::error(ErrorCode::InvalidArgument, "ONNX Runtime requires the CPU provider");
         if (instance_) {
             return Status::error(ErrorCode::InvalidArgument,
                                  "Backend plugin is already loaded");
@@ -72,11 +74,6 @@ public:
         converted.profile_file_prefix_utf8 = profilePath.c_str();
 
         void* instance = nullptr;
-        const bool needsExtension = config.provider == ExecutionProvider::Cuda &&
-                                    config.backend == RuntimeBackend::OnnxRuntime;
-        if (needsExtension && !execution_.create_with_provider)
-            return Status::error(ErrorCode::DeviceUnavailable,
-                                 "Backend plugin does not support explicit CUDA selection");
         const int32_t created = execution_.create_with_provider
             ? execution_.create_with_provider(&converted, static_cast<int32_t>(config.provider), &instance)
             : api_.create(&converted, &instance);

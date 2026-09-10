@@ -36,7 +36,7 @@ GPU 实例串行使用其资源，加载、搜索和销毁选择所属 CUDA 设�
 ## 构建与部署
 
 `ANOM_ENABLE_FAISS_GPU` 默认 OFF，`*-cpu` 预设关闭，`*-nvidia` 预设开启。
-也可以单独开启，例如在 ORT CUDA 推理方案下禁用 TensorRT、启用 GPU Faiss。
+GPU 网络推理由 TensorRT 提供，GPU Faiss 作为独立插件负责 PatchCore/SPADE 检索。
 
 GPU Faiss 编译为独立的 `anom_search_faiss_cuda.dll`（Linux 为 `.so`），与算法
 插件放在同一个 `plugin_directory_utf8` 目录，安装时一起打包。CPU 算法插件

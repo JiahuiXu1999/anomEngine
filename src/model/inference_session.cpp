@@ -71,8 +71,7 @@ struct RuntimeCandidate {
 
 const char* candidateName(const RuntimeCandidate& candidate) noexcept {
     return candidate.backend == RuntimeBackend::TensorRT
-        ? "tensorrt/cuda" : candidate.provider == ExecutionProvider::Cuda
-        ? "onnxruntime/cuda" : "onnxruntime/cpu";
+        ? "tensorrt/cuda" : "onnxruntime/cpu";
 }
 
 bool retryableRuntimeFailure(ErrorCode code) noexcept {
@@ -131,8 +130,6 @@ Result<std::vector<RuntimeCandidate>> runtimeCandidates(
         case DevicePreference::Gpu:
             if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
                 add(RuntimeBackend::TensorRT, ExecutionProvider::Cuda);
-            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)
-                add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cuda);
             if (options.fallbackPolicy == FallbackPolicy::LoadOnly &&
                 (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime))
                 add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cpu, true);
@@ -140,10 +137,8 @@ Result<std::vector<RuntimeCandidate>> runtimeCandidates(
         case DevicePreference::Auto:
             if (!constrainedBackend || *constrainedBackend == RuntimeBackend::TensorRT)
                 add(RuntimeBackend::TensorRT, ExecutionProvider::Cuda);
-            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime) {
-                add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cuda);
+            if (!constrainedBackend || *constrainedBackend == RuntimeBackend::OnnxRuntime)
                 add(RuntimeBackend::OnnxRuntime, ExecutionProvider::Cpu, true);
-            }
             break;
     }
 

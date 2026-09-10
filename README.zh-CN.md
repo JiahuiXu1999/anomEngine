@@ -14,7 +14,7 @@
 - 带版本管理的 C11 ABI，确保 STL、OpenCV 类型、异常和 C++ 虚接口不跨越公共 DLL / 共享库边界。
 - 每种算法都是独立的公共对象（`anom_patchcore_t`、`anom_padim_t`、`anom_yolo_t` 等），算法专属能力无需扩充统一会话接口即可独立演进。
 - 算法插件目前支持 Direct Prediction、EfficientAD、DFKDE、PaDiM、PatchCore、SPADE，以及 YOLO 风格的预测输出。
-- 后端插件支持 NVIDIA GPU 上的 TensorRT，以及 CPU / 可选 CUDA 上的 ONNX Runtime。
+- 后端插件支持 NVIDIA GPU 上的 TensorRT，以及 CPU 上的 ONNX Runtime。
 - 通过模型包清单声明张量绑定、预处理、后处理、运行时设置，以及可选的模型资源 SHA-256 校验和。
 - 共享后处理模块通过统一的结果接口提供图像分数、异常图、掩码、连通区域和耗时信息。
 - 提供适用于 Windows MSVC 和 Linux GCC / Clang 的 CMake 预设。
@@ -67,7 +67,7 @@ C 和 C++ 用户统一直接使用这些 C ABI 结构体。
 
 ## 构建
 
-原有预设会启用全部算法、两个后端、严格警告和测试。此外还提供明确的 `-cpu` 和 `-nvidia` 变体：CPU 预设不需要 TensorRT 或 CUDA；NVIDIA 预设启用 TensorRT、ONNX Runtime CUDA 和 GPU Faiss，并支持按加载策略回退到 CPU。GPU Faiss 需要额外的静态 SDK。配置好所需依赖的查找路径后，运行与平台和部署方式匹配的预设：
+原有预设会启用全部算法、两个后端、严格警告和测试。此外还提供明确的 `-cpu` 和 `-nvidia` 变体：CPU 预设不需要 TensorRT 或 CUDA；NVIDIA 预设启用 TensorRT 和 GPU Faiss，并支持按加载策略回退到 ONNX Runtime CPU。GPU Faiss 需要额外的静态 SDK。配置好所需依赖的查找路径后，运行与平台和部署方式匹配的预设：
 
 ```powershell
 cmake --preset windows-msvc-ninja-release
@@ -106,7 +106,7 @@ cmake --build build/local --config Release
 
 ## 仓库结构
 
-CPU/GPU 选择、运行时探测、回退规则和 ORT CUDA 部署说明见
+CPU/GPU 选择、运行时探测和回退规则见
 [`docs/cpu-gpu-modes.md`](docs/cpu-gpu-modes.md)。GPU 模式支持神经网络推理和
 PatchCore/SPADE 的 Faiss 检索；预处理、特征变换和后处理仍在 CPU。
 Faiss 的独立插件、构建依赖、回退和执行信息见

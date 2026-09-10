@@ -143,7 +143,7 @@ void testExecutionSelectionCAbi() {
             "CPU request unexpectedly accepted TensorRT");
     require(direct.internal == nullptr, "Rejected Direct load retained state");
 
-    options.backend_utf8 = "onnxruntime";
+    options.backend_utf8 = nullptr;
     options.device = ANOM_DEVICE_GPU;
     // Force an unavailable device independently of whether CI has a GPU.
     options.device_id = INT32_MAX;
@@ -163,10 +163,11 @@ void testExecutionSelectionCAbi() {
             "GPU-preferred session did not report a fallback reason");
     direct.release(&direct);
 
+    options.backend_utf8 = "onnxruntime";
     options.fallback = ANOM_FALLBACK_NONE;
     require(direct.load(&direct, packageUtf8.c_str(), &options) ==
                 ANOM_STATUS_UNSUPPORTED,
-            "Strict GPU request unexpectedly accepted an unavailable CUDA device");
+            "Strict GPU request unexpectedly accepted the CPU-only ONNX Runtime backend");
     require(direct.internal == nullptr, "Rejected strict GPU load retained state");
 
     options.backend_utf8 = nullptr;
@@ -188,9 +189,9 @@ void testExecutionSelectionCAbi() {
 void testRuntimeProbeCAbi() {
     require(anom_runtime_probe("onnxruntime", "cpu", -1, nullptr) == ANOM_STATUS_OK,
             "CPU runtime probe failed: " + lastError());
-    require(anom_runtime_probe("onnxruntime", "cuda", INT32_MAX, nullptr) == ANOM_STATUS_UNSUPPORTED,
-            "An unavailable CUDA device passed probing");
-    require(!lastError().empty(), "Unavailable device probe lost its diagnostic");
+    require(anom_runtime_probe("onnxruntime", "cuda", 0, nullptr) == ANOM_STATUS_INVALID_ARGUMENT,
+            "ONNX Runtime accepted a CUDA provider");
+    require(!lastError().empty(), "Invalid provider pairing lost its diagnostic");
     require(anom_runtime_probe("onnxruntime", "cpu", -1, nullptr) == ANOM_STATUS_OK && lastError().empty(),
             "CPU probe did not clear the previous diagnostic");
     require(anom_runtime_probe("tensorrt", "cpu", 0, nullptr) == ANOM_STATUS_INVALID_ARGUMENT,

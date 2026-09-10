@@ -1,6 +1,5 @@
 #include "backends/backend_factory.h"
 
-#include <cstring>
 #include <filesystem>
 #include <future>
 #include <iostream>
@@ -25,12 +24,9 @@ TensorMap inputs(int batch) {
 }
 }
 
-int main(int argc, char** argv) {
+int main() {
     try {
-        require(argc == 2, "Expected tensorrt or onnxruntime");
-        const RuntimeBackend kind = std::strcmp(argv[1], "tensorrt") == 0
-            ? RuntimeBackend::TensorRT : RuntimeBackend::OnnxRuntime;
-        auto gpu = createRuntimeBackend(kind);
+        auto gpu = createRuntimeBackend(RuntimeBackend::TensorRT);
         if (!gpu) {
             std::cout << "SKIP: " << gpu.status().describe() << '\n';
             return 77;
@@ -41,7 +37,7 @@ int main(int argc, char** argv) {
             return 77;
         }
         BackendConfig config;
-        config.backend = kind;
+        config.backend = RuntimeBackend::TensorRT;
         config.provider = ExecutionProvider::Cuda;
         config.onnxPath = std::filesystem::path(ANOM_TEST_DATA_DIR) / "identity_dynamic.onnx";
         config.loadPolicy = EngineLoadPolicy::BuildIfMissing;
@@ -86,7 +82,7 @@ int main(int argc, char** argv) {
                 "Retained GPU output changed after wrapper destruction");
         // Final batch and instance destruction must select the owning device.
         std::async(std::launch::async, [tensor = std::move(retainedGpuOutput)]() mutable { tensor = {}; }).get();
-        std::cout << argv[1] << " CUDA parity and cross-thread lifetime checks passed\n";
+        std::cout << "TensorRT CUDA parity and cross-thread lifetime checks passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

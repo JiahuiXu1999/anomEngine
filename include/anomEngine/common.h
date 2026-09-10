@@ -97,7 +97,7 @@ enum {
 
 /*
  * Options shared by the algorithm objects. AUTO tries TensorRT/CUDA,
- * ONNX Runtime/CUDA, then ONNX Runtime/CPU, subject to available artifacts.
+ * then ONNX Runtime/CPU, subject to available artifacts.
  * A non-empty backend_utf8 constrains selection to "tensorrt" or "onnxruntime".
  * CPU never initializes CUDA. GPU requires a GPU inference provider unless
  * LOAD_ONLY fallback is enabled. PatchCore/SPADE Faiss retrieval follows the
@@ -119,7 +119,8 @@ typedef struct anom_algorithm_options {
 } anom_algorithm_options_t;
 
 /* Probe one backend/provider/device without loading a model. backend_utf8 must
- * be "tensorrt" or "onnxruntime"; provider_utf8 must be "cpu" or "cuda".
+ * be "tensorrt" or "onnxruntime". TensorRT requires provider_utf8="cuda";
+ * ONNX Runtime requires provider_utf8="cpu".
  * device_id is -1 (default device 0) or non-negative; ignored for CPU.
  * A null/empty plugin directory uses the SDK directory. Returns OK when the
  * runtime/device is usable, UNSUPPORTED when unavailable, or a plugin/argument

@@ -124,7 +124,6 @@
             "binaryDir": "${sourceDir}/build/windows-msvc-ninja-release-cpu",
             "cacheVariables": {
                 "ANOM_ENABLE_TENSORRT": "OFF",
-                "ANOM_ENABLE_ORT_CUDA": "OFF",
                 "ANOM_ENABLE_FAISS_GPU": "OFF"
             }
         },
@@ -135,7 +134,6 @@
             "binaryDir": "${sourceDir}/build/windows-msvc-ninja-release-nvidia",
             "cacheVariables": {
                 "ANOM_ENABLE_TENSORRT": "ON",
-                "ANOM_ENABLE_ORT_CUDA": "ON",
                 "ANOM_ENABLE_FAISS_GPU": "ON"
             }
         },
@@ -146,7 +144,6 @@
             "binaryDir": "${sourceDir}/build/linux-gcc-ninja-release-cpu",
             "cacheVariables": {
                 "ANOM_ENABLE_TENSORRT": "OFF",
-                "ANOM_ENABLE_ORT_CUDA": "OFF",
                 "ANOM_ENABLE_FAISS_GPU": "OFF"
             }
         },
@@ -157,7 +154,6 @@
             "binaryDir": "${sourceDir}/build/linux-gcc-ninja-release-nvidia",
             "cacheVariables": {
                 "ANOM_ENABLE_TENSORRT": "ON",
-                "ANOM_ENABLE_ORT_CUDA": "ON",
                 "ANOM_ENABLE_FAISS_GPU": "ON"
             }
         }

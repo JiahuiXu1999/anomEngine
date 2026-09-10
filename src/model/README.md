@@ -105,13 +105,13 @@ patchcore.get_execution_info(&patchcore, &execution);
 patchcore.release(&patchcore);
 ```
 
-`ANOM_DEVICE_CPU` selects ONNX Runtime CPU without initializing CUDA. `ANOM_DEVICE_GPU` tries TensorRT/CUDA and then ONNX Runtime/CUDA;
+`ANOM_DEVICE_CPU` selects ONNX Runtime CPU without initializing CUDA. `ANOM_DEVICE_GPU` selects TensorRT/CUDA;
 `ANOM_FALLBACK_LOAD_ONLY` additionally permits ONNX Runtime CPU when GPU initialization fails. `ANOM_DEVICE_AUTO`
-tries TensorRT/CUDA, ONNX Runtime/CUDA, and then ONNX Runtime/CPU, even with `ANOM_FALLBACK_NONE`. A non-empty `backend_utf8` constrains
+tries TensorRT/CUDA and then ONNX Runtime/CPU, even with `ANOM_FALLBACK_NONE`. A non-empty `backend_utf8` constrains
 selection to `tensorrt` or `onnxruntime`. Fallback only occurs while loading or warming the algorithm object; prediction
 failures are never silently retried on a different device.
 
-Use `anom_runtime_probe("onnxruntime", "cuda", 0, NULL)` to check a provider/device
+Use `anom_runtime_probe("tensorrt", "cuda", 0, NULL)` to check the GPU runtime/device
 without loading a model. GPU mode accelerates neural-network inference; other
 pipeline stages remain on CPU. See [CPU / GPU execution modes](../../docs/cpu-gpu-modes.md)
 for the full contract, build options and plugin compatibility.
@@ -174,7 +174,7 @@ runtime never generates indices or fits Gaussian statistics.
 ## Runtime behavior
 
 - `runtime.backend` selects `tensorrt` (the backwards-compatible default) or `onnxruntime`.
-- ONNX Runtime defaults to CPU. With `ANOM_ENABLE_ORT_CUDA=ON`, GPU load options can select its CUDA execution provider. The installed ORT distribution must include CUDA support and compatible provider dependencies.
+- ONNX Runtime is the CPU backend. GPU neural-network inference uses TensorRT.
 - ORT discovers every graph input/output from model metadata, preserves dynamic dimensions in the signature,
   validates concrete request shapes and copies resolved dynamic outputs into the backend-neutral `TensorMap`.
 - ORT thread counts, sequential/parallel execution, graph optimization, memory pattern, CPU arena, and

@@ -5,24 +5,24 @@ load-time policy; the backend and provider are separate internal choices. GPU
 means GPU neural-network inference and, for PatchCore/SPADE, GPU Faiss retrieval
 unless permitted loading fallback selects CPU. Preprocessing, feature transforms
 and postprocessing currently remain on CPU, and backend tensor outputs
-are returned in host memory. ORT may also assign unsupported graph nodes to CPU.
-Selecting CUDA is not a guarantee that every graph node executes on GPU.
+are returned in host memory. GPU neural-network inference always uses TensorRT;
+ONNX Runtime is the CPU backend.
 
 ## Selection contract
 
 | Request | Candidate order |
 | --- | --- |
 | CPU | ONNX Runtime / CPU |
-| GPU, no fallback | TensorRT / CUDA, ONNX Runtime / CUDA |
-| GPU, load-only fallback | TensorRT / CUDA, ONNX Runtime / CUDA, ONNX Runtime / CPU |
-| AUTO | TensorRT / CUDA, ONNX Runtime / CUDA, ONNX Runtime / CPU |
+| GPU, no fallback | TensorRT / CUDA |
+| GPU, load-only fallback | TensorRT / CUDA, ONNX Runtime / CPU |
+| AUTO | TensorRT / CUDA, ONNX Runtime / CPU |
 
-`backend_utf8` filters this list to the named backend. In particular, GPU plus
-`"onnxruntime"` now requests ORT CUDA; it only permits CPU when load-only fallback
-is enabled. AUTO permits CPU selection even with `ANOM_FALLBACK_NONE`, preserving
-the existing API contract. `device_id = -1` selects device 0; an explicit CPU request
-ignores a non-negative GPU device id. No CUDA provider is registered or probed on
-the CPU load path.
+`backend_utf8` filters this list to the named backend. TensorRT only supports CUDA,
+and ONNX Runtime only supports CPU. A GPU request constrained to `"onnxruntime"`
+therefore requires load-only fallback to select CPU. AUTO permits CPU selection
+even with `ANOM_FALLBACK_NONE`, preserving the existing API contract.
+`device_id = -1` selects CUDA device 0; an explicit CPU request ignores a
+non-negative device id and never initializes CUDA.
 
 Candidates must have compatible model artifacts. An engine-only package cannot
 run on CPU: include ONNX to support CPU fallback. Existing engine load/build
@@ -74,7 +74,7 @@ use `ANOM_DEVICE_GPU` with `ANOM_FALLBACK_NONE`.
 ## Availability query
 
 ```c
-anom_status_t status = anom_runtime_probe("onnxruntime", "cuda", 0, NULL);
+anom_status_t status = anom_runtime_probe("tensorrt", "cuda", 0, NULL);
 /* OK: runtime/device available; UNSUPPORTED: provider/device unavailable.
    Plugin loading and invalid arguments have their own status codes.
    Use anom_get_last_error for the diagnostic. */
@@ -82,27 +82,18 @@ anom_status_t status = anom_runtime_probe("onnxruntime", "cuda", 0, NULL);
 
 The query loads the backend plugin, checks provider availability and probes the
 requested device. It does not open a model or build a TensorRT engine. CPU probing
-does not initialize CUDA; CUDA probing may initialize its driver/provider. Query
+does not initialize CUDA; TensorRT probing may initialize the CUDA driver. Query
 success does not guarantee operator compatibility or enough memory for a model.
-Always handle the result of `load`. CPU-only ORT distributions are valid even
-when CUDA selection was enabled at build time: probing CUDA explains that the
-provider is absent, and CPU execution remains available.
+Always handle the result of `load`.
 
 ## Build and deployment
 
-- `*-cpu` presets explicitly disable TensorRT, ORT CUDA and GPU Faiss. No CUDA Toolkit is
+- `*-cpu` presets explicitly disable TensorRT and GPU Faiss. No CUDA Toolkit is
   required. Use a CPU ORT distribution for a minimal deployment.
-- `*-nvidia` presets enable TensorRT, `ANOM_ENABLE_ORT_CUDA` and `ANOM_ENABLE_FAISS_GPU`. Install a GPU ORT
-  distribution to use ORT CUDA, with the CUDA/cuDNN versions required by that
-  distribution. Enabling this flag alone does not install a CUDA provider.
-- ORT CUDA can be enabled independently of TensorRT:
-  `-DANOM_ENABLE_TENSORRT=OFF -DANOM_ENABLE_ORT_CUDA=ON`.
-- The ORT plugin calls CUDA provider APIs through ORT's C function table, and has
-  no direct CUDA Toolkit link dependency. Its CPU path can still run without the
-  optional CUDA provider DLLs. Windows deployment copies provider DLLs found next
-  to the selected ORT runtime when CUDA support is enabled. Supply the provider's
-  CUDA/cuDNN dependencies separately. On Linux, deploy ORT and its provider shared
-  libraries together with their dependencies and configure the loader paths.
+- `*-nvidia` presets enable TensorRT and `ANOM_ENABLE_FAISS_GPU`. ONNX Runtime
+  remains the CPU backend used by explicit CPU requests and permitted fallback.
+- Deploy a CPU ONNX Runtime distribution. CUDA and cuDNN dependencies come only
+  from TensorRT and the optional GPU Faiss plugin.
 
 ## Plugin compatibility and threading
 
@@ -111,9 +102,9 @@ execution-info reserved words now report `faiss_provider`, `faiss_device_id` and
 `faiss_fallback_occurred`. The original backend plugin v1 ABI is unchanged.
 Backends optionally export `anom_backend_query_execution_v1`, which negotiates a
 separate function table for explicit provider creation and device probing. A new
-host still loads a legacy plugin in its original default mode. It rejects ORT CUDA
-selection if the extension is missing, instead of allowing an old plugin to run
-silently on CPU. A legacy plugin cannot answer the new probe API.
+host still loads a legacy plugin in its original default mode. Backend/provider
+pairs are validated before loading: TensorRT requires CUDA and ONNX Runtime
+requires CPU. A legacy plugin cannot answer the new probe API.
 
 TensorRT load, inference and destruction select the object's owning CUDA device
 and restore the calling thread's previous device. Pending inference transfers
@@ -128,8 +119,9 @@ fallback, AUTO selection, diagnostics and runtime probing. Unavailable-device
 tests use an invalid device id so results do not depend on CI GPU presence.
 `ort_backend_tests` also loads a v1-only test plugin to verify legacy CPU loading
 and rejection of CUDA requests when provider negotiation is unavailable.
-`runtime_device_tests` compares CPU and GPU dynamic-batch results and invokes and
-destroys a GPU backend on host threads different from its loading thread. CTest
+`runtime_device_tests` compares ONNX Runtime CPU and TensorRT GPU dynamic-batch
+results and invokes and destroys a GPU backend on host threads different from its
+loading thread. CTest
 reports hardware/provider-dependent tests as skipped (code 77) when unavailable;
 once a runtime/device passes probing, load and inference failures fail the test.
 
@@ -157,7 +149,7 @@ retained outputs. Consumers read via const `Tensor::data()` and `byteSize()`;
 `bytes` can be empty for an external view. Mutable `data()` access creates a
 private copy so it cannot change another consumer's shared output.
 
-TensorRT still performs device-to-host output transfers. ORT still copies its
+TensorRT still performs device-to-host output transfers. ORT copies its
 runtime output into a host Tensor, and preprocessing, feature transforms
 and postprocessing still run on CPU. GPU Faiss uploads the flattened CPU features
 and returns distances/labels to CPU. The existing `backendMs` includes inference,
@@ -174,8 +166,3 @@ cmake -S tests/backend_memory -B build/backend-memory
 cmake --build build/backend-memory --config Release
 ctest --test-dir build/backend-memory -C Release --output-on-failure
 ```
-
-The ORT provider setup follows the official
-[CUDA provider configuration](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html),
-including copies on the default stream. Consult its dependency table when choosing
-an ORT CUDA distribution.
