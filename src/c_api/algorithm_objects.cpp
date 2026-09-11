@@ -19,7 +19,7 @@ template <typename Object>
 anom_status_t validateInit(Object* self) noexcept {
     anomLastError.clear();
     if (!self || self->struct_size < sizeof(Object)) {
-        return initError("Object struct_size is incompatible with ABI v3");
+        return initError("Object struct_size is incompatible with ABI v4");
     }
     if (self->abi_version != 0 && self->abi_version != ANOM_ENGINE_ABI_VERSION) {
         return initError("Object ABI version is incompatible");
@@ -102,18 +102,6 @@ ANOM_ENGINE_API anom_status_t ANOM_CALL anom_padim_init(anom_padim_t* self) {
     initialized.get_execution_info = anom::c_api::padimGetExecutionInfo;
     initialized.predict = anom::c_api::padimPredict;
     initialized.predict_batch = anom::c_api::padimPredictBatch;
-    *self = initialized;
-    return ANOM_STATUS_OK;
-}
-
-ANOM_ENGINE_API anom_status_t ANOM_CALL anom_padim_fitter_init(
-    anom_padim_fitter_t* self) {
-    const auto status = validateInit(self);
-    if (status != ANOM_STATUS_OK) return status;
-
-    anom_padim_fitter_t initialized{};
-    initialized.struct_size = self->struct_size;
-    initialized.abi_version = ANOM_ENGINE_ABI_VERSION;
     initialized.create = anom::c_api::padimFitterCreate;
     initialized.add_batch = anom::c_api::padimFitterAddBatch;
     initialized.get_progress = anom::c_api::padimFitterGetProgress;
@@ -121,7 +109,6 @@ ANOM_ENGINE_API anom_status_t ANOM_CALL anom_padim_fitter_init(
     initialized.load_checkpoint = anom::c_api::padimFitterLoadCheckpoint;
     initialized.cancel = anom::c_api::padimFitterCancel;
     initialized.finalize = anom::c_api::padimFitterFinalize;
-    initialized.release = anom::c_api::padimFitterRelease;
     *self = initialized;
     return ANOM_STATUS_OK;
 }
@@ -140,18 +127,6 @@ ANOM_ENGINE_API anom_status_t ANOM_CALL anom_patchcore_init(anom_patchcore_t* se
     initialized.get_execution_info = anom::c_api::patchcoreGetExecutionInfo;
     initialized.predict = anom::c_api::patchcorePredict;
     initialized.predict_batch = anom::c_api::patchcorePredictBatch;
-    *self = initialized;
-    return ANOM_STATUS_OK;
-}
-
-ANOM_ENGINE_API anom_status_t ANOM_CALL anom_patchcore_fitter_init(
-    anom_patchcore_fitter_t* self) {
-    const auto status = validateInit(self);
-    if (status != ANOM_STATUS_OK) return status;
-
-    anom_patchcore_fitter_t initialized{};
-    initialized.struct_size = self->struct_size;
-    initialized.abi_version = ANOM_ENGINE_ABI_VERSION;
     initialized.create = anom::c_api::patchcoreFitterCreate;
     initialized.add_batch = anom::c_api::patchcoreFitterAddBatch;
     initialized.get_progress = anom::c_api::patchcoreFitterGetProgress;
@@ -159,7 +134,6 @@ ANOM_ENGINE_API anom_status_t ANOM_CALL anom_patchcore_fitter_init(
     initialized.load_checkpoint = anom::c_api::patchcoreFitterLoadCheckpoint;
     initialized.cancel = anom::c_api::patchcoreFitterCancel;
     initialized.finalize = anom::c_api::patchcoreFitterFinalize;
-    initialized.release = anom::c_api::patchcoreFitterRelease;
     *self = initialized;
     return ANOM_STATUS_OK;
 }

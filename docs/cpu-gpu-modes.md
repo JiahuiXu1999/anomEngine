@@ -97,7 +97,7 @@ Always handle the result of `load`.
 
 ## Plugin compatibility and threading
 
-Public ABI v3 structure sizes and existing field offsets are unchanged. Three
+The execution-info structure retains its ABI v3 size and existing field offsets. Three
 execution-info reserved words now report `faiss_provider`, `faiss_device_id` and
 `faiss_fallback_occurred`. The original backend plugin v1 ABI is unchanged.
 Backends optionally export `anom_backend_query_execution_v1`, which negotiates a

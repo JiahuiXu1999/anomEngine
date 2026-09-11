@@ -279,6 +279,7 @@ add_library(anom::engine ALIAS anom_engine)
 target_sources(anom_engine PRIVATE
     "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/anom_engine.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/algorithm_objects.cpp"
+    "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/algorithm_runtime_state.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/c_api/model_management.cpp")
 if(ANOM_BUILD_ALGO_PATCHCORE OR ANOM_BUILD_ALGO_PADIM)
     target_sources(anom_engine PRIVATE

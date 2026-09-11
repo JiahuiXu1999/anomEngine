@@ -3,6 +3,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+ANOM_ENGINE_API size_t ANOM_CALL test_live_sessions(void);
+ANOM_ENGINE_API size_t ANOM_CALL test_live_fitters(void);
+#ifdef __cplusplus
+}
+#endif
+
 /* Consuming reserved words must preserve the ABI of existing SDK clients. */
 struct legacy_execution_info {
     uint32_t struct_size;
@@ -412,11 +421,11 @@ static int test_padim(void) {
 }
 
 static int test_padim_fitter(void) {
-    anom_padim_fitter_t object = {0};
-    anom_padim_fitter_t other = {0};
-    anom_padim_fitter_t saved;
+    anom_padim_t object = {0};
+    anom_padim_t other = {0};
+    anom_padim_t saved;
     struct extended_object {
-        anom_padim_fitter_t object;
+        anom_padim_t object;
         unsigned char tail[32];
     } extended;
     struct undersized_object {
@@ -426,29 +435,41 @@ static int test_padim_fitter(void) {
     } undersized;
     unsigned char before[sizeof(undersized)];
     int state = 0;
-    CHECK(anom_padim_fitter_init(NULL) == ANOM_STATUS_INVALID_ARGUMENT);
-    CHECK(anom_padim_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_padim_init(NULL) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_padim_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
 
     memset(&undersized, 0xa5, sizeof(undersized));
     undersized.struct_size = sizeof(uint32_t);
     memcpy(before, &undersized, sizeof(before));
-    CHECK(anom_padim_fitter_init((anom_padim_fitter_t*)&undersized) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_padim_init((anom_padim_t*)&undersized) == ANOM_STATUS_INVALID_ARGUMENT);
     CHECK(memcmp(before, &undersized, sizeof(before)) == 0);
 
     object.struct_size = sizeof(object);
     object.abi_version = ANOM_ENGINE_ABI_VERSION + 1;
     memcpy(&saved, &object, sizeof(saved));
-    CHECK(anom_padim_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_padim_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
     CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
+
+    /* A v3 version or its shorter algorithm layout must fail without writes. */
+    object.abi_version = 3;
+    memcpy(&saved, &object, sizeof(saved));
+    CHECK(anom_padim_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
+    object.abi_version = 0;
+    object.struct_size = (uint32_t)offsetof(anom_padim_t, create);
+    memcpy(&saved, &object, sizeof(saved));
+    CHECK(anom_padim_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
+    object.struct_size = sizeof(object);
 
     object.abi_version = 0;
     object.internal = &state;
     memcpy(&saved, &object, sizeof(saved));
-    CHECK(anom_padim_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_padim_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
     CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
     object.internal = NULL;
 
-    CHECK(anom_padim_fitter_init(&object) == ANOM_STATUS_OK);
+    CHECK(anom_padim_init(&object) == ANOM_STATUS_OK);
     CHECK(object.struct_size == sizeof(object));
     CHECK(object.abi_version == ANOM_ENGINE_ABI_VERSION);
     CHECK(object.internal == NULL);
@@ -460,28 +481,39 @@ static int test_padim_fitter(void) {
     CHECK(object.cancel != NULL);
     CHECK(object.finalize != NULL);
     CHECK(object.release != NULL);
-    CHECK(anom_padim_fitter_init(&object) == ANOM_STATUS_OK);
+    CHECK(anom_padim_init(&object) == ANOM_STATUS_OK);
 
     memset(&extended, 0, sizeof(extended));
     memset(extended.tail, 0xa5, sizeof(extended.tail));
     extended.object.struct_size = sizeof(extended);
-    CHECK(anom_padim_fitter_init(&extended.object) == ANOM_STATUS_OK);
+    CHECK(anom_padim_init(&extended.object) == ANOM_STATUS_OK);
     CHECK(extended.object.struct_size == sizeof(extended));
     for (size_t i = 0; i < sizeof(extended.tail); ++i)
         CHECK(extended.tail[i] == 0xa5);
 
     other.struct_size = sizeof(other);
-    CHECK(anom_padim_fitter_init(&other) == ANOM_STATUS_OK);
+    CHECK(anom_padim_init(&other) == ANOM_STATUS_OK);
     {
         anom_padim_fitter_options_t options = {0};
         anom_fit_progress_t progress = {0};
         anom_image_t image = {0};
+        anom_prediction_t prediction = {0};
+        anom_algorithm_options_t load_options = {0};
+        load_options.struct_size = sizeof(load_options);
+        load_options.warmup = 7;
         options.struct_size = sizeof(options);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.add_batch(&object, &image, 1) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(object.create(&object, NULL) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(object.create(&object, &options) == ANOM_STATUS_OK);
         CHECK(other.create(&other, &options) == ANOM_STATUS_OK);
+        CHECK(test_live_fitters() == 2 && test_live_sessions() == 0);
+        CHECK(object.create(&object, &options) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.warmup(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.load(&object, "invalid", &load_options) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_OK);
         memcpy(&saved, &object, sizeof(saved));
-        CHECK(anom_padim_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(anom_padim_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
         CHECK(object.add_batch(&object, &image, 1) == ANOM_STATUS_OK);
         CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_OK);
@@ -489,15 +521,31 @@ static int test_padim_fitter(void) {
         CHECK(object.load_checkpoint(&object, "checkpoint") == ANOM_STATUS_OK);
         CHECK(object.finalize(&object, "output") == ANOM_STATUS_OK);
         CHECK(object.cancel(&object) == ANOM_STATUS_OK);
+        /* Load after fitting on the same object; neither runtime replaces the other. */
+        CHECK(object.load(&object, "model", &load_options) == ANOM_STATUS_OK);
+        CHECK(test_live_fitters() == 2 && test_live_sessions() == 1);
+        CHECK(object.load(&object, "model", &load_options) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.predict(&object, &image, &prediction) == ANOM_STATUS_OK);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_OK);
+        CHECK(other.warmup(&other) == ANOM_STATUS_INVALID_ARGUMENT);
         object.release(&object);
         CHECK(object.internal == NULL);
+        CHECK(test_live_fitters() == 1 && test_live_sessions() == 0);
+        CHECK(object.predict(&object, &image, &prediction) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(other.get_progress(&other, &progress) == ANOM_STATUS_OK);
+        /* Reverse order and failure isolation: inference first, then fitting. */
+        CHECK(object.load(&object, "model", &load_options) == ANOM_STATUS_OK);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.create(&object, NULL) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.predict(&object, &image, &prediction) == ANOM_STATUS_OK);
         CHECK(object.create(&object, &options) == ANOM_STATUS_OK);
     }
     object.release(&object);
     object.release(&object);
     other.release(&other);
     CHECK(object.internal == NULL && other.internal == NULL);
+    CHECK(test_live_fitters() == 0 && test_live_sessions() == 0);
     CHECK(object.release != NULL && object.abi_version == ANOM_ENGINE_ABI_VERSION);
     return 0;
 }
@@ -598,11 +646,11 @@ static int test_patchcore(void) {
 }
 
 static int test_patchcore_fitter(void) {
-    anom_patchcore_fitter_t object = {0};
-    anom_patchcore_fitter_t other = {0};
-    anom_patchcore_fitter_t saved;
+    anom_patchcore_t object = {0};
+    anom_patchcore_t other = {0};
+    anom_patchcore_t saved;
     struct extended_object {
-        anom_patchcore_fitter_t object;
+        anom_patchcore_t object;
         unsigned char tail[32];
     } extended;
     struct undersized_object {
@@ -612,29 +660,41 @@ static int test_patchcore_fitter(void) {
     } undersized;
     unsigned char before[sizeof(undersized)];
     int state = 0;
-    CHECK(anom_patchcore_fitter_init(NULL) == ANOM_STATUS_INVALID_ARGUMENT);
-    CHECK(anom_patchcore_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_patchcore_init(NULL) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_patchcore_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
 
     memset(&undersized, 0xa5, sizeof(undersized));
     undersized.struct_size = sizeof(uint32_t);
     memcpy(before, &undersized, sizeof(before));
-    CHECK(anom_patchcore_fitter_init((anom_patchcore_fitter_t*)&undersized) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_patchcore_init((anom_patchcore_t*)&undersized) == ANOM_STATUS_INVALID_ARGUMENT);
     CHECK(memcmp(before, &undersized, sizeof(before)) == 0);
 
     object.struct_size = sizeof(object);
     object.abi_version = ANOM_ENGINE_ABI_VERSION + 1;
     memcpy(&saved, &object, sizeof(saved));
-    CHECK(anom_patchcore_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_patchcore_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
     CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
+
+    /* A v3 version or its shorter algorithm layout must fail without writes. */
+    object.abi_version = 3;
+    memcpy(&saved, &object, sizeof(saved));
+    CHECK(anom_patchcore_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
+    object.abi_version = 0;
+    object.struct_size = (uint32_t)offsetof(anom_patchcore_t, create);
+    memcpy(&saved, &object, sizeof(saved));
+    CHECK(anom_patchcore_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
+    object.struct_size = sizeof(object);
 
     object.abi_version = 0;
     object.internal = &state;
     memcpy(&saved, &object, sizeof(saved));
-    CHECK(anom_patchcore_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+    CHECK(anom_patchcore_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
     CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
     object.internal = NULL;
 
-    CHECK(anom_patchcore_fitter_init(&object) == ANOM_STATUS_OK);
+    CHECK(anom_patchcore_init(&object) == ANOM_STATUS_OK);
     CHECK(object.struct_size == sizeof(object));
     CHECK(object.abi_version == ANOM_ENGINE_ABI_VERSION);
     CHECK(object.internal == NULL);
@@ -646,28 +706,39 @@ static int test_patchcore_fitter(void) {
     CHECK(object.cancel != NULL);
     CHECK(object.finalize != NULL);
     CHECK(object.release != NULL);
-    CHECK(anom_patchcore_fitter_init(&object) == ANOM_STATUS_OK);
+    CHECK(anom_patchcore_init(&object) == ANOM_STATUS_OK);
 
     memset(&extended, 0, sizeof(extended));
     memset(extended.tail, 0xa5, sizeof(extended.tail));
     extended.object.struct_size = sizeof(extended);
-    CHECK(anom_patchcore_fitter_init(&extended.object) == ANOM_STATUS_OK);
+    CHECK(anom_patchcore_init(&extended.object) == ANOM_STATUS_OK);
     CHECK(extended.object.struct_size == sizeof(extended));
     for (size_t i = 0; i < sizeof(extended.tail); ++i)
         CHECK(extended.tail[i] == 0xa5);
 
     other.struct_size = sizeof(other);
-    CHECK(anom_patchcore_fitter_init(&other) == ANOM_STATUS_OK);
+    CHECK(anom_patchcore_init(&other) == ANOM_STATUS_OK);
     {
         anom_patchcore_fitter_options_t options = {0};
         anom_fit_progress_t progress = {0};
         anom_image_t image = {0};
+        anom_prediction_t prediction = {0};
+        anom_algorithm_options_t load_options = {0};
+        load_options.struct_size = sizeof(load_options);
+        load_options.warmup = 7;
         options.struct_size = sizeof(options);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.add_batch(&object, &image, 1) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(object.create(&object, NULL) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(object.create(&object, &options) == ANOM_STATUS_OK);
         CHECK(other.create(&other, &options) == ANOM_STATUS_OK);
+        CHECK(test_live_fitters() == 2 && test_live_sessions() == 0);
+        CHECK(object.create(&object, &options) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.warmup(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.load(&object, "invalid", &load_options) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_OK);
         memcpy(&saved, &object, sizeof(saved));
-        CHECK(anom_patchcore_fitter_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(anom_patchcore_init(&object) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(memcmp(&saved, &object, sizeof(object)) == 0);
         CHECK(object.add_batch(&object, &image, 1) == ANOM_STATUS_OK);
         CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_OK);
@@ -675,15 +746,31 @@ static int test_patchcore_fitter(void) {
         CHECK(object.load_checkpoint(&object, "checkpoint") == ANOM_STATUS_OK);
         CHECK(object.finalize(&object, "output") == ANOM_STATUS_OK);
         CHECK(object.cancel(&object) == ANOM_STATUS_OK);
+        /* Load after fitting on the same object; neither runtime replaces the other. */
+        CHECK(object.load(&object, "model", &load_options) == ANOM_STATUS_OK);
+        CHECK(test_live_fitters() == 2 && test_live_sessions() == 1);
+        CHECK(object.load(&object, "model", &load_options) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.predict(&object, &image, &prediction) == ANOM_STATUS_OK);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_OK);
+        CHECK(other.warmup(&other) == ANOM_STATUS_INVALID_ARGUMENT);
         object.release(&object);
         CHECK(object.internal == NULL);
+        CHECK(test_live_fitters() == 1 && test_live_sessions() == 0);
+        CHECK(object.predict(&object, &image, &prediction) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_INVALID_ARGUMENT);
         CHECK(other.get_progress(&other, &progress) == ANOM_STATUS_OK);
+        /* Reverse order and failure isolation: inference first, then fitting. */
+        CHECK(object.load(&object, "model", &load_options) == ANOM_STATUS_OK);
+        CHECK(object.get_progress(&object, &progress) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.create(&object, NULL) == ANOM_STATUS_INVALID_ARGUMENT);
+        CHECK(object.predict(&object, &image, &prediction) == ANOM_STATUS_OK);
         CHECK(object.create(&object, &options) == ANOM_STATUS_OK);
     }
     object.release(&object);
     object.release(&object);
     other.release(&other);
     CHECK(object.internal == NULL && other.internal == NULL);
+    CHECK(test_live_fitters() == 0 && test_live_sessions() == 0);
     CHECK(object.release != NULL && object.abi_version == ANOM_ENGINE_ABI_VERSION);
     return 0;
 }
@@ -888,6 +975,7 @@ int ANOM_CALL main(void) {
     CHECK(test_patchcore_fitter() == 0);
     CHECK(test_spade() == 0);
     CHECK(test_yolo() == 0);
-    puts("All 9 C ABI object protocol tests passed.");
+    CHECK(test_live_sessions() == 0 && test_live_fitters() == 0);
+    puts("All 9 C ABI protocol tests passed (7 algorithms, 2 integrated fitting workflows).");
     return 0;
 }

@@ -6,6 +6,7 @@ include(CTest)
 get_filename_component(ANOM_OBJECT_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 add_library(anom_object_test_runtime SHARED
     "${ANOM_OBJECT_SOURCE_ROOT}/src/c_api/algorithm_objects.cpp"
+    "${ANOM_OBJECT_SOURCE_ROOT}/src/c_api/algorithm_runtime_state.cpp"
     runtime_stubs.cpp)
 target_compile_definitions(anom_object_test_runtime PRIVATE ANOM_ENGINE_BUILD=1)
 target_include_directories(anom_object_test_runtime

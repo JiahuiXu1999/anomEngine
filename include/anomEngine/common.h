@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-#define ANOM_ENGINE_ABI_VERSION 3u
+#define ANOM_ENGINE_ABI_VERSION 4u
 
 typedef int32_t anom_status_t;
 enum {

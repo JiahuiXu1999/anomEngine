@@ -117,33 +117,31 @@ anom_status_t ANOM_CALL yoloPredictBatch(
     anom_prediction_t* out_predictions);
 
 anom_status_t ANOM_CALL patchcoreFitterCreate(
-    anom_patchcore_fitter_t* self, const anom_patchcore_fitter_options_t* options);
+    anom_patchcore_t* self, const anom_patchcore_fitter_options_t* options);
 anom_status_t ANOM_CALL patchcoreFitterAddBatch(
-    anom_patchcore_fitter_t* self, const anom_image_t* images, size_t image_count);
+    anom_patchcore_t* self, const anom_image_t* images, size_t image_count);
 anom_status_t ANOM_CALL patchcoreFitterGetProgress(
-    const anom_patchcore_fitter_t* self, anom_fit_progress_t* out_progress);
+    const anom_patchcore_t* self, anom_fit_progress_t* out_progress);
 anom_status_t ANOM_CALL patchcoreFitterSaveCheckpoint(
-    const anom_patchcore_fitter_t* self, const char* checkpoint_path_utf8);
+    const anom_patchcore_t* self, const char* checkpoint_path_utf8);
 anom_status_t ANOM_CALL patchcoreFitterLoadCheckpoint(
-    anom_patchcore_fitter_t* self, const char* checkpoint_path_utf8);
-anom_status_t ANOM_CALL patchcoreFitterCancel(anom_patchcore_fitter_t* self);
+    anom_patchcore_t* self, const char* checkpoint_path_utf8);
+anom_status_t ANOM_CALL patchcoreFitterCancel(anom_patchcore_t* self);
 anom_status_t ANOM_CALL patchcoreFitterFinalize(
-    anom_patchcore_fitter_t* self, const char* output_package_utf8);
-void ANOM_CALL patchcoreFitterRelease(anom_patchcore_fitter_t* self);
+    anom_patchcore_t* self, const char* output_package_utf8);
 
 anom_status_t ANOM_CALL padimFitterCreate(
-    anom_padim_fitter_t* self, const anom_padim_fitter_options_t* options);
+    anom_padim_t* self, const anom_padim_fitter_options_t* options);
 anom_status_t ANOM_CALL padimFitterAddBatch(
-    anom_padim_fitter_t* self, const anom_image_t* images, size_t image_count);
+    anom_padim_t* self, const anom_image_t* images, size_t image_count);
 anom_status_t ANOM_CALL padimFitterGetProgress(
-    const anom_padim_fitter_t* self, anom_fit_progress_t* out_progress);
+    const anom_padim_t* self, anom_fit_progress_t* out_progress);
 anom_status_t ANOM_CALL padimFitterSaveCheckpoint(
-    const anom_padim_fitter_t* self, const char* checkpoint_path_utf8);
+    const anom_padim_t* self, const char* checkpoint_path_utf8);
 anom_status_t ANOM_CALL padimFitterLoadCheckpoint(
-    anom_padim_fitter_t* self, const char* checkpoint_path_utf8);
-anom_status_t ANOM_CALL padimFitterCancel(anom_padim_fitter_t* self);
+    anom_padim_t* self, const char* checkpoint_path_utf8);
+anom_status_t ANOM_CALL padimFitterCancel(anom_padim_t* self);
 anom_status_t ANOM_CALL padimFitterFinalize(
-    anom_padim_fitter_t* self, const char* output_package_utf8);
-void ANOM_CALL padimFitterRelease(anom_padim_fitter_t* self);
+    anom_padim_t* self, const char* output_package_utf8);
 
 }  // namespace anom::c_api

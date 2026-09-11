@@ -2,6 +2,7 @@
 #include "anomEngine/anomEngine.h"
 
 #include "c_api/algorithm_object_impl.h"
+#include "c_api/algorithm_runtime_state.h"
 
 #ifndef ANOM_ENGINE_HAS_PATCHCORE
 #  define ANOM_ENGINE_HAS_PATCHCORE 0
@@ -58,6 +59,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+using anom::c_api::attachRuntime;
+using anom::c_api::runtimeState;
 
 using anom::model::AlgorithmType;
 using anom::model::BackendConfig;
@@ -1173,20 +1177,22 @@ namespace {
 
 template <typename Fitter>
 anom_fitter_t* typedFitter(Fitter* fitter, const char* name) {
-    if (!fitter || fitter->struct_size < sizeof(Fitter) || !fitter->internal) {
+    if (!fitter || fitter->struct_size < sizeof(Fitter) ||
+        !fitter->internal || !runtimeState(fitter)->fitter) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " fitter is not initialized");
         return nullptr;
     }
-    return static_cast<anom_fitter_t*>(fitter->internal);
+    return runtimeState(fitter)->fitter;
 }
 
 template <typename Fitter>
 const anom_fitter_t* typedFitter(const Fitter* fitter, const char* name) {
-    if (!fitter || fitter->struct_size < sizeof(Fitter) || !fitter->internal) {
+    if (!fitter || fitter->struct_size < sizeof(Fitter) ||
+        !fitter->internal || !runtimeState(fitter)->fitter) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " fitter is not initialized");
         return nullptr;
     }
-    return static_cast<const anom_fitter_t*>(fitter->internal);
+    return runtimeState(fitter)->fitter;
 }
 
 template <typename Fitter>
@@ -1199,7 +1205,9 @@ anom_status_t attachTypedFitter(Fitter* destination,
         return fail(ANOM_STATUS_INVALID_MODEL_PACKAGE,
                     std::string(name) + " fitter requires a matching model template");
     }
-    destination->internal = implementation;
+    if (!attachRuntime(destination->internal, implementation)) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while creating algorithm state");
+    }
     return ANOM_STATUS_OK;
 }
 
@@ -1234,10 +1242,11 @@ anom_status_t validateFitterTemplate(const char* templatePackage,
 namespace anom::c_api {
 
 anom_status_t ANOM_CALL patchcoreFitterCreate(
-    anom_patchcore_fitter_t* fitter,
+    anom_patchcore_t* fitter,
     const anom_patchcore_fitter_options_t* options) {
     anomLastError.clear();
-    if (!fitter || fitter->struct_size < sizeof(*fitter) || fitter->internal ||
+    if (!fitter || fitter->struct_size < sizeof(*fitter) ||
+        (fitter->internal && runtimeState(fitter)->fitter) ||
         !options || options->struct_size < sizeof(*options)) {
         return fail(ANOM_STATUS_INVALID_ARGUMENT,
                     "PatchCore fitter object or options are invalid");
@@ -1262,10 +1271,11 @@ anom_status_t ANOM_CALL patchcoreFitterCreate(
 }
 
 anom_status_t ANOM_CALL padimFitterCreate(
-    anom_padim_fitter_t* fitter,
+    anom_padim_t* fitter,
     const anom_padim_fitter_options_t* options) {
     anomLastError.clear();
-    if (!fitter || fitter->struct_size < sizeof(*fitter) || fitter->internal ||
+    if (!fitter || fitter->struct_size < sizeof(*fitter) ||
+        (fitter->internal && runtimeState(fitter)->fitter) ||
         !options || options->struct_size < sizeof(*options)) {
         return fail(ANOM_STATUS_INVALID_ARGUMENT,
                     "PaDiM fitter object or options are invalid");
@@ -1287,55 +1297,49 @@ anom_status_t ANOM_CALL padimFitterCreate(
                              "PaDiM");
 }
 
-#define ANOM_DEFINE_FITTER_IMPL(name, display_name)                               \
-    anom_status_t ANOM_CALL name##FitterAddBatch(                                \
-        anom_##name##_fitter_t* fitter, const anom_image_t* images,              \
-        size_t imageCount) {                                                      \
-        auto* implementation = typedFitter(fitter, display_name);                 \
-        return implementation                                                    \
-                   ? anom_fitter_add_batch(implementation, images, imageCount)    \
-                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
-    }                                                                             \
-    anom_status_t ANOM_CALL name##FitterGetProgress(                             \
-        const anom_##name##_fitter_t* fitter,                                    \
-        anom_fit_progress_t* outProgress) {                                       \
-        const auto* implementation = typedFitter(fitter, display_name);           \
-        return implementation                                                    \
-                   ? anom_fitter_get_progress(implementation, outProgress)        \
-                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
-    }                                                                             \
-    anom_status_t ANOM_CALL name##FitterSaveCheckpoint(                          \
-        const anom_##name##_fitter_t* fitter, const char* path) {                \
-        const auto* implementation = typedFitter(fitter, display_name);           \
-        return implementation                                                    \
-                   ? anom_fitter_save_checkpoint(implementation, path)            \
-                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
-    }                                                                             \
-    anom_status_t ANOM_CALL name##FitterLoadCheckpoint(                          \
-        anom_##name##_fitter_t* fitter, const char* path) {                      \
-        auto* implementation = typedFitter(fitter, display_name);                 \
-        return implementation                                                    \
-                   ? anom_fitter_load_checkpoint(implementation, path)            \
-                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
-    }                                                                             \
-    anom_status_t ANOM_CALL name##FitterCancel(                                  \
-        anom_##name##_fitter_t* fitter) {                                         \
-        auto* implementation = typedFitter(fitter, display_name);                 \
-        return implementation ? anom_fitter_cancel(implementation)               \
-                              : ANOM_STATUS_INVALID_ARGUMENT;                     \
-    }                                                                             \
-    anom_status_t ANOM_CALL name##FitterFinalize(                                \
-        anom_##name##_fitter_t* fitter, const char* outputPackage) {             \
-        auto* implementation = typedFitter(fitter, display_name);                 \
-        return implementation                                                    \
-                   ? anom_fitter_finalize(implementation, outputPackage)          \
-                   : ANOM_STATUS_INVALID_ARGUMENT;                                \
-    }                                                                             \
-    void ANOM_CALL name##FitterRelease(anom_##name##_fitter_t* fitter) {         \
-        if (!fitter || fitter->struct_size < sizeof(*fitter)) return;             \
-        anom_fitter_destroy(static_cast<anom_fitter_t*>(fitter->internal));       \
-        fitter->internal = nullptr;                                               \
-        std::memset(fitter->reserved, 0, sizeof(fitter->reserved));               \
+#define ANOM_DEFINE_FITTER_IMPL(name, display_name)                                \
+    anom_status_t ANOM_CALL name##FitterAddBatch(                                  \
+        anom_##name##_t* fitter, const anom_image_t* images,                       \
+        size_t imageCount) {                                                       \
+        auto* implementation = typedFitter(fitter, display_name);                  \
+        return implementation                                                      \
+                   ? anom_fitter_add_batch(implementation, images, imageCount)     \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                 \
+    }                                                                              \
+    anom_status_t ANOM_CALL name##FitterGetProgress(                               \
+        const anom_##name##_t* fitter,                                             \
+        anom_fit_progress_t* outProgress) {                                        \
+        const auto* implementation = typedFitter(fitter, display_name);            \
+        return implementation                                                      \
+                   ? anom_fitter_get_progress(implementation, outProgress)         \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                 \
+    }                                                                              \
+    anom_status_t ANOM_CALL name##FitterSaveCheckpoint(                            \
+        const anom_##name##_t* fitter, const char* path) {                         \
+        const auto* implementation = typedFitter(fitter, display_name);            \
+        return implementation                                                      \
+                   ? anom_fitter_save_checkpoint(implementation, path)             \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                 \
+    }                                                                              \
+    anom_status_t ANOM_CALL name##FitterLoadCheckpoint(                            \
+        anom_##name##_t* fitter, const char* path) {                               \
+        auto* implementation = typedFitter(fitter, display_name);                  \
+        return implementation                                                      \
+                   ? anom_fitter_load_checkpoint(implementation, path)             \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                 \
+    }                                                                              \
+    anom_status_t ANOM_CALL name##FitterCancel(                                    \
+        anom_##name##_t* fitter) {                                                 \
+        auto* implementation = typedFitter(fitter, display_name);                  \
+        return implementation ? anom_fitter_cancel(implementation)                 \
+                              : ANOM_STATUS_INVALID_ARGUMENT;                      \
+    }                                                                              \
+    anom_status_t ANOM_CALL name##FitterFinalize(                                  \
+        anom_##name##_t* fitter, const char* outputPackage) {                      \
+        auto* implementation = typedFitter(fitter, display_name);                  \
+        return implementation                                                      \
+                   ? anom_fitter_finalize(implementation, outputPackage)           \
+                   : ANOM_STATUS_INVALID_ARGUMENT;                                 \
     }
 
 ANOM_DEFINE_FITTER_IMPL(patchcore, "PatchCore")

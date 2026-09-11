@@ -333,9 +333,9 @@ void testModelManagementCAbi() {
     anom_patchcore_fitter_options_t wrongOptions{};
     wrongOptions.struct_size = sizeof(wrongOptions);
     wrongOptions.template_package_utf8 = packageUtf8.c_str();
-    anom_patchcore_fitter_t wrongFitter{};
+    anom_patchcore_t wrongFitter{};
     wrongFitter.struct_size = sizeof(wrongFitter);
-    require(anom_patchcore_fitter_init(&wrongFitter) == ANOM_STATUS_OK,
+    require(anom_patchcore_init(&wrongFitter) == ANOM_STATUS_OK,
             "PatchCore fitter init failed");
     require(wrongFitter.create(&wrongFitter, &wrongOptions) ==
                 ANOM_STATUS_ALGORITHM_MISMATCH,
@@ -344,7 +344,7 @@ void testModelManagementCAbi() {
             "Rejected PatchCore fitter retained state");
 }
 
-void testPatchCoreFitterCAbi() {
+void testPatchCoreLifecycleCAbi() {
     bool available = false;
     for (std::size_t index = 0; index < anom_algorithm_get_count(); ++index) {
         anom_algorithm_info_t info{};
@@ -358,7 +358,7 @@ void testPatchCoreFitterCAbi() {
     const auto unique = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path() /
-                      ("anom-cabi-fitter-" + unique);
+                      ("anom-cabi-algorithm-" + unique);
     const auto templatePackage = root / "template";
     const auto outputPackage = root / "model";
     const auto checkpoint = root / "checkpoint.bin";
@@ -395,12 +395,12 @@ void testPatchCoreFitterCAbi() {
     options.coreset_sampling_ratio = 0.5F;
     options.projection_dimension = 3;
     options.random_seed = 7;
-    anom_patchcore_fitter_t fitter{};
-    fitter.struct_size = sizeof(fitter);
-    require(anom_patchcore_fitter_init(&fitter) == ANOM_STATUS_OK,
-            "PatchCore fitter init failed");
-    require(fitter.create(&fitter, &options) == ANOM_STATUS_OK,
-            "PatchCore fitter create failed: " + lastError());
+    anom_patchcore_t algorithm{};
+    algorithm.struct_size = sizeof(algorithm);
+    require(anom_patchcore_init(&algorithm) == ANOM_STATUS_OK,
+            "PatchCore algorithm init failed");
+    require(algorithm.create(&algorithm, &options) == ANOM_STATUS_OK,
+            "PatchCore algorithm create failed: " + lastError());
 
     const std::uint8_t pixels[24] = {
         0, 0, 0, 32, 32, 32, 64, 64, 64, 96, 96, 96,
@@ -414,26 +414,65 @@ void testPatchCoreFitterCAbi() {
         images[index].stride_bytes = 6;
         images[index].pixel_format = ANOM_PIXEL_FORMAT_RGB8;
     }
-    require(fitter.add_batch(&fitter, images, 2) == ANOM_STATUS_OK,
-            "PatchCore fitter add batch failed: " + lastError());
+    require(algorithm.add_batch(&algorithm, images, 2) == ANOM_STATUS_OK,
+            "PatchCore algorithm add batch failed: " + lastError());
     anom_fit_progress_t progress{};
     progress.struct_size = sizeof(progress);
-    require(fitter.get_progress(&fitter, &progress) == ANOM_STATUS_OK,
-            "PatchCore fitter progress failed: " + lastError());
+    require(algorithm.get_progress(&algorithm, &progress) == ANOM_STATUS_OK,
+            "PatchCore algorithm progress failed: " + lastError());
     require(progress.processed_samples == 2 && progress.collected_items == 8,
-            "PatchCore fitter reported incorrect progress");
+            "PatchCore algorithm reported incorrect progress");
     const std::string checkpointUtf8 = anom::model::pathToUtf8(checkpoint);
-    require(fitter.save_checkpoint(&fitter, checkpointUtf8.c_str()) ==
+    require(algorithm.save_checkpoint(&algorithm, checkpointUtf8.c_str()) ==
                 ANOM_STATUS_OK,
             "PatchCore checkpoint save failed: " + lastError());
     const std::string outputUtf8 = anom::model::pathToUtf8(outputPackage);
-    require(fitter.finalize(&fitter, outputUtf8.c_str()) == ANOM_STATUS_OK,
-            "PatchCore fitter finalize failed: " + lastError());
-    fitter.release(&fitter);
-    require(fitter.internal == nullptr, "PatchCore fitter release retained state");
+    require(algorithm.finalize(&algorithm, outputUtf8.c_str()) == ANOM_STATUS_OK,
+            "PatchCore algorithm finalize failed: " + lastError());
+    anom_algorithm_options_t loadOptions{};
+    loadOptions.struct_size = sizeof(loadOptions);
+    loadOptions.device = ANOM_DEVICE_CPU;
+    loadOptions.device_id = -1;
+    require(algorithm.load(&algorithm, outputUtf8.c_str(), &loadOptions) == ANOM_STATUS_OK,
+            "Fitting object could not load its output: " + lastError());
+    require(algorithm.get_progress(&algorithm, &progress) == ANOM_STATUS_OK &&
+                progress.stage == ANOM_FIT_STAGE_COMPLETE,
+            "Loading inference overwrote fitting state");
+    anom_prediction_t prediction{};
+    prediction.struct_size = sizeof(prediction);
+    const auto predicted = algorithm.predict(&algorithm, images, &prediction);
+    anom_prediction_release(&prediction);
+    require(predicted == ANOM_STATUS_OK,
+            "Fitting object could not predict: " + lastError());
+    require(algorithm.create(&algorithm, &options) == ANOM_STATUS_INVALID_ARGUMENT,
+            "Duplicate fitting creation should be rejected");
+    algorithm.release(&algorithm);
+    require(algorithm.internal == nullptr, "PatchCore release retained runtime state");
+    require(algorithm.get_progress(&algorithm, &progress) == ANOM_STATUS_INVALID_ARGUMENT,
+            "Released object retained fitting state");
+    require(algorithm.warmup(&algorithm) == ANOM_STATUS_INVALID_ARGUMENT,
+            "Released object retained inference state");
+    // Start with inference, then create a new algorithm on the same object.
+    require(algorithm.load(&algorithm, outputUtf8.c_str(), &loadOptions) == ANOM_STATUS_OK,
+            "PatchCore reload failed: " + lastError());
+    auto invalidOptions = options;
+    invalidOptions.template_package_utf8 = nullptr;
+    require(algorithm.create(&algorithm, &invalidOptions) != ANOM_STATUS_OK,
+            "Invalid fitting creation was accepted");
+    anom_model_info_t info{};
+    info.struct_size = sizeof(info);
+    require(algorithm.get_model_info(&algorithm, &info) == ANOM_STATUS_OK,
+            "Failed fitting creation destroyed inference");
+    require(algorithm.create(&algorithm, &options) == ANOM_STATUS_OK,
+            "Inference object could not create algorithm: " + lastError());
+    require(algorithm.add_batch(&algorithm, images, 2) == ANOM_STATUS_OK,
+            "Fitting alongside inference failed: " + lastError());
+    algorithm.release(&algorithm);
+    algorithm.release(&algorithm);
+    require(algorithm.internal == nullptr, "Repeated release retained state");
 
     require(std::filesystem::is_regular_file(outputPackage / "memory.faiss"),
-            "PatchCore fitter did not produce a memory bank");
+            "PatchCore algorithm did not produce a memory bank");
     anom_model_validation_report_t report{};
     report.struct_size = sizeof(report);
     anom_model_validate_options_t validateOptions{};
@@ -466,7 +505,7 @@ int main() {
         testRuntimeProbeCAbi();
         testIndependentAlgorithmObjects();
         testModelManagementCAbi();
-        testPatchCoreFitterCAbi();
+        testPatchCoreLifecycleCAbi();
         testInvalidArguments();
         std::cout << "C API contract tests passed\n";
         return 0;

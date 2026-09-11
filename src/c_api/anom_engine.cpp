@@ -2,6 +2,7 @@
 #include "anomEngine/anomEngine.h"
 
 #include "c_api/algorithm_object_impl.h"
+#include "c_api/algorithm_runtime_state.h"
 
 #include "infrastructure/utf8_path.h"
 
@@ -37,6 +38,9 @@ using anom::model::RuntimeBackend;
 using anom::model::Status;
 
 thread_local std::string anomLastError;
+
+using anom::c_api::attachRuntime;
+using anom::c_api::runtimeState;
 
 struct anom_session {
     std::unique_ptr<InferenceSession> implementation;
@@ -492,7 +496,7 @@ anom_status_t loadAlgorithm(const char* modelPackage,
         return fail(ANOM_STATUS_INVALID_ARGUMENT,
                     std::string(expectedName) + " object struct_size is incompatible");
     }
-    if (algorithm->internal) {
+    if (algorithm->internal && runtimeState(algorithm)->session) {
         return fail(ANOM_STATUS_INVALID_ARGUMENT,
                     std::string(expectedName) + " object is already loaded");
     }
@@ -520,34 +524,38 @@ anom_status_t loadAlgorithm(const char* modelPackage,
     anom_session_t* session = nullptr;
     const anom_status_t loaded = anom_session_create_v2(modelPackage, options, &session);
     if (loaded != ANOM_STATUS_OK) return loaded;
-    algorithm->internal = session;
+    if (!attachRuntime(algorithm->internal, session)) {
+        return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while creating algorithm state");
+    }
     return ANOM_STATUS_OK;
 }
 
 template <typename Algorithm>
 void releaseAlgorithm(Algorithm* algorithm) {
     if (!algorithm || algorithm->struct_size < sizeof(Algorithm)) return;
-    anom_session_destroy(static_cast<anom_session_t*>(algorithm->internal));
+    delete runtimeState(algorithm);
     algorithm->internal = nullptr;
     std::memset(algorithm->reserved, 0, sizeof(algorithm->reserved));
 }
 
 template <typename Algorithm>
 anom_session_t* algorithmSession(Algorithm* algorithm, const char* name) {
-    if (!algorithm || algorithm->struct_size < sizeof(Algorithm) || !algorithm->internal) {
+    if (!algorithm || algorithm->struct_size < sizeof(Algorithm) ||
+        !algorithm->internal || !runtimeState(algorithm)->session) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " object is not loaded");
         return nullptr;
     }
-    return static_cast<anom_session_t*>(algorithm->internal);
+    return runtimeState(algorithm)->session;
 }
 
 template <typename Algorithm>
 const anom_session_t* algorithmSession(const Algorithm* algorithm, const char* name) {
-    if (!algorithm || algorithm->struct_size < sizeof(Algorithm) || !algorithm->internal) {
+    if (!algorithm || algorithm->struct_size < sizeof(Algorithm) ||
+        !algorithm->internal || !runtimeState(algorithm)->session) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " object is not loaded");
         return nullptr;
     }
-    return static_cast<const anom_session_t*>(algorithm->internal);
+    return runtimeState(algorithm)->session;
 }
 
 }  // namespace

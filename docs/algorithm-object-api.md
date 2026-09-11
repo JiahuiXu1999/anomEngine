@@ -1,4 +1,4 @@
-# Algorithm object C ABI (v3)
+# Algorithm object C ABI (v4)
 
 Each algorithm is a caller-owned C structure containing its runtime state pointer
 and a typed table of operations. Both C and C++ callers can create these objects
@@ -16,8 +16,8 @@ directly; no C++ wrapper is required.
 
 Each header is independently usable and includes `anomEngine/common.h` for
 shared types and model/result utilities. `anomEngine/anomEngine.h` remains the
-umbrella header. PatchCore and PaDiM headers also define their algorithm-specific
-fitter objects, options and operations. Structures are explicitly defined, so
+umbrella header. PatchCore and PaDiM expose fitting operations directly on their
+algorithm objects, with algorithm-specific fitting options. Structures are explicitly defined, so
 algorithm-specific operations can be added without expanding every algorithm.
 
 ## Calling an object
@@ -72,14 +72,15 @@ are part of this boundary.
   guarantee callable methods. Error details use `anom_get_last_error`.
 - A larger structure is accepted; init preserves the caller's `struct_size`
   and leaves bytes beyond the known structure untouched.
-- Release clears runtime state and retains the methods, ABI version and size.
+- Release clears both inference and fitting state and retains the methods, ABI version and size.
   Repeated release is safe on a valid object. The object can be loaded again.
   A failed load also leaves the method table available for retry.
 - Do not copy an initialized object by assignment or memcpy. Do not modify
   `internal`, reserved fields or method pointers. Each object owns its state.
 - Method pointers do not imply thread safety. Serialize operations on the same
-  inference object. Fitter progress/cancellation retain their documented
-  concurrency exceptions. Independent objects own independent runtimes.
+  algorithm object. Fitting progress/cancellation retain their documented
+  concurrency exceptions. Never release while any call is in progress.
+  Independent objects own independent runtimes.
 - Keep the core DLL loaded while any object, method pointer or result is in use.
   Model-info strings are borrowed from the producing runtime/model and expire
   when it is released. C objects have no automatic destructor.
@@ -89,10 +90,23 @@ Loading checks the package's algorithm and returns
 
 ## Fitting and future extensions
 
-`anom_patchcore_fitter_init` and `anom_padim_fitter_init` populate the fitter
-tables. Call `fitter.create(&fitter, &options)`, `add_batch`, `get_progress`,
-`save_checkpoint`, `load_checkpoint`, `cancel`, `finalize`, and `release`
-through the object. See [model lifecycle](cabi-model-lifecycle.md).
+`anom_patchcore_init` and `anom_padim_init` populate both inference and fitting
+methods. Call `object.create(&object, &options)`, `add_batch`, `get_progress`,
+`save_checkpoint`, `load_checkpoint`, `cancel`, and `finalize` directly on the
+algorithm object. There is no separate fitter object, nested member or `fit_`
+method prefix. The fitting option types remain `anom_patchcore_fitter_options_t`
+and `anom_padim_fitter_options_t`.
+
+`create` allocates fitting resources only; it does not require `load`. `load`
+allocates inference resources only. Both can coexist in either creation order,
+and failure in one workflow preserves the other's existing state. A second
+`create` or `load` is rejected when that runtime already exists. `finalize` writes
+a model package and retains fitting state; explicitly `load` that package to use
+it for prediction. It does not replace an already loaded inference model.
+`release` frees both runtimes, including after failure or cancellation. To start
+a fresh fitting run or replace a loaded model, release the object first, then
+create/load again. Use separate algorithm instances if their release lifetimes
+must be independent. See [model lifecycle](cabi-model-lifecycle.md).
 
 Future PatchCore memory-bank editing/pruning operations belong in its own
 structure and implementation. They are not implemented by this interface
@@ -101,11 +115,13 @@ negotiate new layouts and gate access by the caller's size/version.
 
 ## Migration and verification
 
-ABI v3 enlarges algorithm and fitter objects. Rebuild clients with these headers
-and deploy the matching core library; old v2 binaries are not supported as v3
-clients. The former standalone algorithm and fitter operations are no longer
-public symbols. Initialize the function table and call operations through the
-object.
+ABI v4 adds fitting methods to PatchCore and PaDiM and removes their standalone
+`anom_*_fitter_t` structures and `anom_*_fitter_init` exports. Replace them with
+`anom_patchcore_t` / `anom_padim_t` and the corresponding algorithm initializer;
+existing fitting method names are unchanged. Rebuild clients with these headers
+and deploy the matching core library. ABI v2/v3 clients are not supported as v4
+clients. Other algorithm method layouts remain unchanged, but initializers now
+report ABI v4. Initialize the function table and call operations through the object.
 
 The former C++ wrappers have been removed. C and C++ use the same algorithm
 headers and explicit object lifecycle. Migrate wrapper-based code to the C
@@ -115,14 +131,16 @@ behind `ANOM_ENGINE_ENABLE_LEGACY_SESSION_API`.
 The protocol checks can run without inference dependencies:
 
 ```sh
-cmake -S tests/object_api -B build/cabi-v3-protocol
-cmake --build build/cabi-v3-protocol
-ctest --test-dir build/cabi-v3-protocol --output-on-failure
+cmake -S tests/object_api -B build/cabi-v4-protocol
+cmake --build build/cabi-v4-protocol
+ctest --test-dir build/cabi-v4-protocol --output-on-failure
 ```
 
-They link a C client against a shared library containing the production object
-initializers and runtime test doubles. They check table dispatch, initialization,
-size/version rejection, larger caller buffers, independent objects and reuse;
+They link C and C++ clients against a shared library containing the production object
+initializers, runtime ownership implementation, and runtime test doubles. They
+check table dispatch, initialization, size/version rejection, larger caller
+buffers, independent objects, fitting/inference in both creation orders,
+failure isolation, complete resource release, and reuse;
 they do not validate numerical inference. The main `c_api_contract_tests` also
 exercise real Direct inference and PatchCore fitting through object methods when
 the required dependencies/plugins are available.

@@ -27,7 +27,10 @@
 设置 `struct_size` 后，调用 `anom_patchcore_init(&object)` 初始化函数表，
 再通过 `object.load(&object, path, &options)`、
 `object.predict(&object, &image, &prediction)` 完成检测链路。
-公共 ABI 已升至 v3，旧 v2 客户端需要重新编译并部署配套核心库。
+PatchCore 和 PaDiM 还在同一个算法结构体中直接提供 `create`、`add_batch`、
+`get_progress`、`save_checkpoint`、`load_checkpoint`、`cancel` 和 `finalize`；
+`release` 统一释放推理与拟合资源，不再需要单独的 fitter 对象。
+公共 ABI 已升至 v4，旧 v2/v3 客户端需要重新编译并部署配套核心库。
 C 和 C++ 用户统一直接使用这些 C ABI 结构体。
 运行时，每个对象会校验模型包的算法类型，再通过支持版本协商的 C 函数表加载对应算法插件和后端插件。
 

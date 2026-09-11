@@ -35,7 +35,7 @@ public API is released with `anom_prediction_release`.
 
 Internal C++ tests may include `model/inference_session.h`, but SDK consumers
 should include an algorithm header such as `anomEngine/patchcore.h`, or the
-`anomEngine/anomEngine.h` umbrella. See `docs/algorithm-object-api.md` for ABI v3
+`anomEngine/anomEngine.h` umbrella. See `docs/algorithm-object-api.md` for ABI v4
 object initialization and migration requirements.
 
 ## Algorithm-specific entry points

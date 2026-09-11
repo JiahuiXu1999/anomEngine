@@ -36,7 +36,10 @@ C ABI algorithm structure. Include an individual public header such as
 [`anomEngine.h`](include/anomEngine/anomEngine.h) umbrella. Set `struct_size`,
 call `anom_patchcore_init(&object)`, then use methods such as
 `object.load(&object, path, &options)` and
-`object.predict(&object, &image, &prediction)`. ABI v3 requires rebuilding v2
+`object.predict(&object, &image, &prediction)`. PatchCore and PaDiM also expose
+`create`, `add_batch`, `get_progress`, `save_checkpoint`, `load_checkpoint`,
+`cancel`, and `finalize` directly on the same object; `release` frees both
+inference and fitting resources. ABI v4 requires rebuilding v2/v3
 clients. C and C++ use the same C structures directly. At runtime, each object validates
 the package algorithm and loads the required algorithm and backend plugins
 through version-negotiated C function tables.

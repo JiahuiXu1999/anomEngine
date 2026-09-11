@@ -7,8 +7,8 @@ PatchCore/PaDiM fitting workflow.
 ## Capability discovery
 
 Include the algorithm-specific C header, such as `anomEngine/patchcore.h`, or
-use `anomEngine/anomEngine.h` for all algorithms. Algorithm and fitter objects
-expose operations directly as C function-pointer members (ABI v3).
+use `anomEngine/anomEngine.h` for all algorithms. Algorithm objects expose
+inference and supported fitting operations directly as C function-pointer members (ABI v4).
 
 Use `anom_algorithm_get_count` and `anom_algorithm_get_info` before presenting
 an algorithm in an application. `available` reports whether its runtime plugin
@@ -53,9 +53,9 @@ package. The builder never edits the template in place.
 For YOLO and EfficientAD this is the complete preparation path: provide a
 manifest template, overlay the externally exported ONNX graph, and commit.
 
-## PatchCore and PaDiM fitter
+## PatchCore and PaDiM fitting
 
-PatchCore and PaDiM expose different fitter structures. Their implementations
+PatchCore and PaDiM expose fitting methods directly on their algorithm structures. Their implementations
 share preprocessing and backend machinery, but users never select an algorithm
 through a generic fitter. A template may omit its generated index or statistics,
 but its graph and output bindings must be usable.
@@ -66,19 +66,42 @@ options.struct_size = sizeof(options);
 options.template_package_utf8 = "models/patchcore-template";
 options.coreset_sampling_ratio = 0.1f;
 
-anom_patchcore_fitter_t fitter = {0};
-fitter.struct_size = sizeof(fitter);
-/* Example fragment: check every status in application code. */
-if (anom_patchcore_fitter_init(&fitter) != ANOM_STATUS_OK) return 1;
-if (fitter.create(&fitter, &options) != ANOM_STATUS_OK) {
-    fitter.release(&fitter);
-    return 1;
+anom_patchcore_t algorithm = {0};
+algorithm.struct_size = sizeof(algorithm);
+anom_status_t status = anom_patchcore_init(&algorithm);
+if (status != ANOM_STATUS_OK) return status;
+status = algorithm.create(&algorithm, &options);
+if (status == ANOM_STATUS_OK)
+    status = algorithm.add_batch(&algorithm, images, image_count);
+if (status == ANOM_STATUS_OK)
+    status = algorithm.save_checkpoint(&algorithm, "work/patchcore.ckpt");
+if (status == ANOM_STATUS_OK)
+    status = algorithm.finalize(&algorithm, "models/patchcore/1.0.0");
+
+/* The same object can load the generated package and predict. */
+anom_algorithm_options_t load_options = {0};
+load_options.struct_size = sizeof(load_options);
+load_options.device = ANOM_DEVICE_AUTO;
+load_options.device_id = -1;
+anom_prediction_t prediction = {0};
+prediction.struct_size = sizeof(prediction);
+if (status == ANOM_STATUS_OK) {
+    status = algorithm.load(&algorithm, "models/patchcore/1.0.0", &load_options);
+    if (status == ANOM_STATUS_OK)
+        status = algorithm.predict(&algorithm, &images[0], &prediction);
 }
-fitter.add_batch(&fitter, images, image_count);
-fitter.save_checkpoint(&fitter, "work/patchcore.ckpt");
-fitter.finalize(&fitter, "models/patchcore/1.0.0");
-fitter.release(&fitter);
+anom_prediction_release(&prediction);
+algorithm.release(&algorithm); /* Releases both inference and fitting resources. */
+return status;
 ```
+
+Initialization only fills the method table. `create` and `load` allocate their
+own resources on demand and may be called in either order. `finalize` does not
+load or replace the inference model, and does not release fitting state. Calling
+`create` again while fitting state exists, or `load` while inference exists,
+returns an error. `release` clears both so the object can be reused. A failed
+creation/load preserves the other runtime. Use separate algorithm objects when
+fitting and inference need independent release lifetimes.
 
 PatchCore templates that already contain a FAISS index seed the fitter with
 that index. New samples are combined with the imported vectors and coreset
@@ -93,10 +116,11 @@ If no PaDiM channel indices are provided, the fitter deterministically selects
 the first `embedding_dimension` channels. Applications that require randomized
 channel selection should provide explicit indices.
 
-Fitter calls are synchronous. The algorithm-specific `*_fitter_get_progress`
-function can be polled from a supervising thread, and `*_fitter_cancel`
+Fitting calls are synchronous. The algorithm's `get_progress`
+method can be polled from a supervising thread, and `cancel`
 requests cancellation between backend batches. Except for cancellation and
-progress polling, a fitter must not be called concurrently.
+progress polling during fitting, serialize operations on the algorithm object.
+Do not release or reinitialize the object until all calls have returned.
 
 ## Calibration
 
@@ -117,7 +141,7 @@ YOLO, EfficientAD, and Direct graphs; they do not enter the artifact fitter.
 ## ABI ownership
 
 All public structures must be zero-initialized and have `struct_size` set.
-Initialize algorithm/fitter method tables with the matching `*_init` function.
-Their runtimes are released through `object.release(&object)`; opaque model,
+Initialize algorithm method tables with the matching `*_init` function.
+Both inference and fitting runtimes are released through `object.release(&object)`; opaque model,
 builder and calibrator handles use their matching `*_destroy` function. Strings returned in algorithm and model information are
 owned by anomEngine and remain valid for the documented handle lifetime.
