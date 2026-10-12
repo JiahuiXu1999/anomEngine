@@ -1,7 +1,9 @@
 #include "adapters/patchcore_adapter.h"
+#include "compute/gpu_compute.h"
 
 #include "adapters/feature_utils.h"
 #include "retrieval/faiss_index.h"
+#include "pipeline/patchcore_statistics.h"
 
 #include <faiss/Index.h>
 #include <faiss/index_io.h>
@@ -22,6 +24,16 @@ public:
         : config_(std::move(config)), outputBindings_(std::move(bindings)) {}
 
     Result<void> loadAssets(const ModelPackage& package) {
+        searchDimension_ = config_.embeddingDimension;
+        if (config_.variant != PatchCoreVariant::Original) {
+            auto statsPath = package.resolveArtifact(config_.statisticsFile);
+            if (!statsPath) return statsPath.status();
+            auto loaded = PatchCoreStatistics::load(statsPath.value(), config_.variant, config_.embeddingDimension);
+            if (!loaded) return loaded.status();
+            statistics_ = std::move(loaded.value());
+            searchDimension_ = statistics_.basis.rows;
+            if (config_.variant == PatchCoreVariant::SubspaceAD) return {};
+        }
         auto path = package.resolveArtifact(config_.indexFile);
         if (!path) return path.status();
         std::unique_ptr<faiss::Index> candidate;
@@ -35,11 +47,11 @@ public:
             return Status::error(ErrorCode::ArtifactCorrupt,
                                  "FAISS returned a null index", path.value().string());
         }
-        if (candidate->d != config_.embeddingDimension) {
+        if (candidate->d != searchDimension_) {
             return Status::error(ErrorCode::TensorShapeMismatch,
                                  "FAISS index dimension does not match manifest",
                                  std::to_string(candidate->d) + " != " +
-                                     std::to_string(config_.embeddingDimension));
+                                     std::to_string(searchDimension_));
         }
         if (candidate->ntotal < config_.numNeighbors) {
             return Status::error(ErrorCode::ArtifactCorrupt,
@@ -55,6 +67,7 @@ public:
     }
 
     Result<SearchExecutionInfo> configureSearch(const SearchExecutionConfig& config) {
+        if (config_.variant == PatchCoreVariant::SubspaceAD) return SearchExecutionInfo{};
         if (!index_) return Status::error(ErrorCode::NotInitialized, "PatchCore index is not loaded");
         return configureFaissIndexes({index_.get()}, config, config_.numNeighbors);
     }
@@ -65,6 +78,7 @@ public:
         std::int64_t staticBatch = -1;
         std::int64_t staticChannels = 0;
         bool allChannelsStatic = true;
+        std::vector<std::int64_t> meanShape;
         for (const auto& semantic : config_.featureLayers) {
             if (!semantics.insert(semantic).second) {
                 return Status::error(ErrorCode::TensorSignatureMismatch,
@@ -88,6 +102,14 @@ public:
                                      "PatchCore feature must be a float32 NCHW tensor", binding->second);
             }
             const auto& dims = spec->shape.dims;
+            if (config_.meanAggregation) {
+                if (meanShape.empty()) meanShape = dims;
+                else for (std::size_t axis = 1; axis < dims.size(); ++axis) {
+                    if (dims[axis] > 0 && meanShape[axis] > 0 && dims[axis] != meanShape[axis])
+                        return Status::error(ErrorCode::TensorSignatureMismatch,
+                                             "Mean aggregation requires matching feature shapes");
+                }
+            }
             for (const auto dim : dims) {
                 if (dim == 0 || dim < -1) {
                     return Status::error(ErrorCode::TensorSignatureMismatch,
@@ -104,7 +126,8 @@ public:
                 staticBatch = dims[0];
             }
             if (dims[1] > 0) {
-                staticChannels += dims[1];
+                if (config_.meanAggregation) staticChannels = dims[1];
+                else staticChannels += dims[1];
             } else {
                 allChannelsStatic = false;
             }
@@ -134,11 +157,93 @@ public:
         return {};
     }
 
+    Result<void> configureCompute(int device, const std::filesystem::path& directory) {
+        if (device < 0) { compute_.reset(); return {}; }
+        auto loaded = GpuCompute::load(device, directory);
+        if (!loaded) return loaded.status();
+        compute_ = std::move(loaded.value());
+        return {};
+    }
+
+    Result<RawPredictionBatch> predictGpu(const TensorMap& outputs, const cv::Size& inputSize) const {
+        try {
+            auto patches = compute_->aggregate(outputs, outputBindings_, config_);
+            const int n = static_cast<int>(patches.shape.dims[0]);
+            const int h = static_cast<int>(patches.shape.dims[1]), w = static_cast<int>(patches.shape.dims[2]);
+            const int locations = h * w;
+            const int64_t count = static_cast<int64_t>(n) * locations;
+            Tensor patchScores;
+            std::vector<float> imageScores;
+            std::vector<int64_t> maxima;
+            if (config_.variant == PatchCoreVariant::SubspaceAD) {
+                patchScores = compute_->transform(patches, statistics_.mean, statistics_.basis, statistics_.scales, true);
+                // Small image-level top-fraction selection stays on CPU.
+                const auto host = compute_->download(patchScores);
+                imageScores.resize(n);
+                const auto top = std::max(1, static_cast<int>(std::ceil(locations * static_cast<double>(config_.topScoreFraction))));
+                for (int i = 0; i < n; ++i) {
+                    const auto* begin = host.data<float>() + static_cast<size_t>(i) * locations;
+                    std::vector<float> sorted(begin, begin + locations);
+                    std::partial_sort(sorted.begin(), sorted.begin() + top, sorted.end(), std::greater<float>());
+                    double sum = 0;
+                    for (int j = 0; j < top; ++j) { if (!std::isfinite(sorted[j])) throw std::runtime_error("Invalid SubAD score"); sum += sorted[j]; }
+                    imageScores[i] = static_cast<float>(sum / top);
+                }
+            } else {
+                if (config_.variant == PatchCoreVariant::Mahalanobis)
+                    patches = compute_->transform(patches, statistics_.mean, statistics_.basis, statistics_.scales, false);
+                Tensor distances;
+                std::vector<faiss::idx_t> labels(static_cast<size_t>(count) * config_.numNeighbors);
+                if (index_->supportsDevice()) {
+                    distances = compute_->allocate({count, config_.numNeighbors});
+                    auto searched = index_->searchDevice(compute_->device(), count, static_cast<const float*>(patches.deviceData),
+                        config_.numNeighbors, static_cast<float*>(distances.deviceData), labels.data());
+                    if (!searched) return searched.status();
+                } else {
+                    // CPU retrieval or older GPU Faiss plugin: explicit host boundary.
+                    const auto host = compute_->download(patches);
+                    distances.shape.dims = {count, config_.numNeighbors};
+                    distances.bytes.resize(labels.size() * sizeof(float));
+                    index_->search(count, host.data<float>(), config_.numNeighbors, distances.data<float>(), labels.data());
+                }
+                if (std::any_of(labels.begin(), labels.end(), [](auto x) { return x < 0; }))
+                    return Status::error(ErrorCode::AdapterFailure, "Invalid Faiss labels");
+                patchScores = compute_->scores(distances, n, locations, config_.numNeighbors, config_.sqrtDistances, imageScores, maxima);
+                if (config_.weightedImageScore && config_.numNeighbors > 1) {
+                    // Batch the support queries across images instead of one GPU launch per image.
+                    std::vector<float> supports(static_cast<size_t>(n) * searchDimension_);
+                    for (int i = 0; i < n; ++i) index_->reconstruct(labels[(static_cast<size_t>(i) * locations + maxima[i]) * config_.numNeighbors], supports.data() + static_cast<size_t>(i) * searchDimension_);
+                    std::vector<float> supportDistances(static_cast<size_t>(n) * config_.numNeighbors);
+                    std::vector<faiss::idx_t> supportLabels(supportDistances.size());
+                    index_->search(n, supports.data(), config_.numNeighbors, supportDistances.data(), supportLabels.data());
+                    for (int i = 0; i < n; ++i) {
+                        auto* begin = supportDistances.data() + static_cast<size_t>(i) * config_.numNeighbors;
+                        for (int j = 0; j < config_.numNeighbors; ++j) {
+                            if (!std::isfinite(begin[j]) || begin[j] < 0 || supportLabels[static_cast<size_t>(i)*config_.numNeighbors+j] < 0) throw std::runtime_error("Invalid support distances");
+                            if (config_.sqrtDistances) begin[j] = std::sqrt(begin[j]);
+                        }
+                        const float maximum = *std::max_element(begin, begin + config_.numNeighbors);
+                        float denominator = 0;
+                        for (int j = 0; j < config_.numNeighbors; ++j) denominator += std::exp(begin[j] - maximum);
+                        imageScores[i] *= 1.0F - std::exp(begin[0] - maximum) / denominator;
+                    }
+                }
+            }
+            const auto maps = compute_->download(compute_->maps(patchScores, n, h, w, inputSize, config_.gaussianSigma));
+            RawPredictionBatch result(n);
+            for (int i = 0; i < n; ++i) {
+                result[i].score = imageScores[i];
+                result[i].anomalyMap = cv::Mat(inputSize.height, inputSize.width, CV_32FC1, const_cast<float*>(maps.data<float>()) + static_cast<size_t>(i)*inputSize.height*inputSize.width, static_cast<size_t>(inputSize.width)*sizeof(float)).clone();
+            }
+            return result;
+        } catch (const std::exception& e) { return Status::error(ErrorCode::CudaFailure, "GPU PatchCore prediction failed", e.what()); }
+    }
+
     Result<RawPredictionBatch> predict(const TensorMap& outputs, const cv::Size& inputSize) const {
-        if (!index_) return Status::error(ErrorCode::NotInitialized, "PatchCore index is not loaded");
-        auto embedding = feature::aggregateFeaturePyramid(
-            outputs, outputBindings_, config_.featureLayers, true,
-            config_.poolingKernel, config_.poolingStride, config_.poolingPadding);
+        if (config_.variant == PatchCoreVariant::SubspaceAD ? statistics_.basis.empty() : !index_)
+            return Status::error(ErrorCode::NotInitialized, "PatchCore assets are not loaded");
+        if (compute_) return predictGpu(outputs, inputSize);
+        auto embedding = aggregatePatchCoreFeatures(outputs, outputBindings_, config_);
         if (!embedding) return embedding.status();
         auto view = feature::viewNchwFloat(embedding.value(), "PatchCore embedding");
         if (!view) return view.status();
@@ -148,9 +253,32 @@ public:
                                  std::to_string(view.value().channels));
         }
 
-        const std::vector<float> queries = feature::flattenPatches(embedding.value());
+        std::vector<float> queries = feature::flattenPatches(embedding.value());
         const std::size_t locations = static_cast<std::size_t>(view.value().height) * view.value().width;
         const std::size_t queryCount = static_cast<std::size_t>(view.value().batch) * locations;
+        if (config_.variant == PatchCoreVariant::SubspaceAD) {
+            auto scores = statistics_.residuals(queries);
+            if (!scores) return scores.status();
+            RawPredictionBatch result(static_cast<std::size_t>(view.value().batch));
+            const auto topCount = std::max<std::size_t>(1, static_cast<std::size_t>(
+                std::ceil(static_cast<double>(locations) * config_.topScoreFraction)));
+            for (std::size_t n = 0; n < result.size(); ++n) {
+                const auto* begin = scores.value().data() + n * locations;
+                result[n].anomalyMap = feature::makeAnomalyMap(begin, view.value().height,
+                    view.value().width, inputSize, config_.gaussianSigma);
+                std::vector<float> sorted(begin, begin + locations);
+                std::partial_sort(sorted.begin(), sorted.begin() + topCount, sorted.end(), std::greater<float>());
+                double sum = 0;
+                for (std::size_t i = 0; i < topCount; ++i) sum += sorted[i];
+                result[n].score = static_cast<float>(sum / static_cast<double>(topCount));
+            }
+            return result;
+        }
+        if (config_.variant == PatchCoreVariant::Mahalanobis) {
+            auto whitened = statistics_.transform(queries);
+            if (!whitened) return whitened.status();
+            queries = std::move(whitened.value());
+        }
         if (queryCount > static_cast<std::size_t>(std::numeric_limits<faiss::idx_t>::max())) {
             return Status::error(ErrorCode::TensorShapeMismatch,
                                  "PatchCore query count exceeds the FAISS index range",
@@ -190,7 +318,7 @@ public:
             if (config_.weightedImageScore && config_.numNeighbors > 1) {
                 const std::size_t query = static_cast<std::size_t>(n) * locations + maximumLocation;
                 const auto supportIndex = indices[query * config_.numNeighbors];
-                std::vector<float> support(static_cast<std::size_t>(config_.embeddingDimension));
+                std::vector<float> support(static_cast<std::size_t>(searchDimension_));
                 std::vector<float> supportDistances(static_cast<std::size_t>(config_.numNeighbors));
                 std::vector<faiss::idx_t> supportIndices(static_cast<std::size_t>(config_.numNeighbors));
                 try {
@@ -226,9 +354,12 @@ public:
     }
 
 private:
+    std::shared_ptr<GpuCompute> compute_;
     PatchCoreConfig config_;
     std::unordered_map<std::string, std::string> outputBindings_;
     std::unique_ptr<FaissIndex> index_;
+    PatchCoreStatistics statistics_;
+    int searchDimension_{0};
 };
 
 PatchCoreAdapter::PatchCoreAdapter(PatchCoreConfig config,
@@ -239,6 +370,7 @@ Result<void> PatchCoreAdapter::loadAssets(const ModelPackage& package) { return 
 Result<SearchExecutionInfo> PatchCoreAdapter::configureSearch(const SearchExecutionConfig& config) {
     return impl_->configureSearch(config);
 }
+Result<void> PatchCoreAdapter::configureCompute(int device, const std::filesystem::path& directory) { return impl_->configureCompute(device, directory); }
 Result<void> PatchCoreAdapter::validateSignature(const TensorSignature& signature) const { return impl_->validateSignature(signature); }
 Result<RawPredictionBatch> PatchCoreAdapter::predict(const TensorMap& outputs,
                                                      const cv::Size& modelInputSize) const {

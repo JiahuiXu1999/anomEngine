@@ -5,6 +5,11 @@ only `anomEngine.lib` / `anomEngine.dll`; the core selects and dynamically loads
 backend plugins from the model manifest. C++ implementation headers under `src` are private and are not part of
 the SDK ABI.
 
+PatchCore's outer C object can select original, MH or SubAD. Original models retain
+schema 1 compatibility; statistical variants require schema 2. See
+[PatchCore variants](../../docs/patchcore-variants.md) for enum usage, model assets,
+training parameters and feature-graph contracts.
+
 ## SDK layout
 
 ```text

@@ -46,6 +46,13 @@ private:
     }
 };
 
+// TensorRT registers one logger per library. Retained device batches and
+// multiple sessions must never leave it pointing at a destroyed instance.
+TensorRTLogger& runtimeLogger() {
+    static TensorRTLogger logger;
+    return logger;
+}
+
 DataType convertType(nvinfer1::DataType type) {
     switch (type) {
         case nvinfer1::DataType::kFLOAT: return DataType::Float32;
@@ -197,7 +204,7 @@ public:
         return {};
     }
 
-    Result<TensorMap> infer(const TensorMap& inputs) {
+    Result<TensorMap> infer(const TensorMap& inputs, bool deviceOutput = false) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!loaded_ || !context_) return failureResult<TensorMap>(ErrorCode::NotInitialized, "Backend is not loaded");
         CudaDeviceScope deviceScope;
@@ -211,6 +218,8 @@ public:
                                                 "Required input tensor is missing", spec.name);
             }
             const Tensor& tensor = found->second;
+            if (tensor.deviceData && (!deviceOutput || tensor.deviceId != config_.deviceId))
+                return failureResult<TensorMap>(ErrorCode::InvalidArgument, "TensorRT input device mismatch");
             if (tensor.dtype != spec.dtype) {
                 return failureResult<TensorMap>(ErrorCode::TensorTypeMismatch,
                                                 "Input tensor data type does not match engine", spec.name);
@@ -239,7 +248,7 @@ public:
         } completion{stream_};
         for (const auto& spec : signature_.inputs) {
             const Tensor& tensor = inputs.at(spec.name);
-            auto buffer = ensureBuffer(spec.name, tensor.byteSize());
+            Result<void*> buffer = tensor.deviceData ? Result<void*>(tensor.deviceData) : ensureBuffer(spec.name, tensor.byteSize());
             if (!buffer) return buffer.status();
             if (!context_->setTensorAddress(spec.name.c_str(), buffer.value())) {
                 return failureResult<TensorMap>(ErrorCode::BackendFailure,
@@ -258,21 +267,34 @@ public:
             auto elements = resolvedShape.elementCount();
             if (!elements) return elements.status();
             const std::size_t bytes = elements.value() * dataTypeSize(spec.dtype);
-            auto buffer = ensureBuffer(spec.name, bytes);
-            if (!buffer) return buffer.status();
-            if (!context_->setTensorAddress(spec.name.c_str(), buffer.value())) {
-                return failureResult<TensorMap>(ErrorCode::BackendFailure,
-                                                "Unable to bind TensorRT output address", spec.name);
-            }
             Tensor tensor;
             tensor.dtype = spec.dtype;
             tensor.shape = std::move(resolvedShape);
-            tensor.bytes.resize(bytes);
+            void* address = nullptr;
+            if (deviceOutput) {
+                const auto allocated = cudaMalloc(&address, bytes);
+                if (allocated != cudaSuccess) return cudaStatus(allocated, "TensorRT output allocation");
+                tensor.deviceData = address;
+                tensor.deviceId = config_.deviceId;
+                tensor.externalByteSize = bytes;
+                tensor.externalOwner = std::shared_ptr<void>(address, [device = config_.deviceId](void* ptr) {
+                    CudaDeviceScope scope;
+                    if (scope.select(device)) cudaFree(ptr);
+                });
+            } else {
+                auto buffer = ensureBuffer(spec.name, bytes);
+                if (!buffer) return buffer.status();
+                address = buffer.value();
+                tensor.bytes.resize(bytes);
+            }
+            if (!context_->setTensorAddress(spec.name.c_str(), address))
+                return failureResult<TensorMap>(ErrorCode::BackendFailure, "Unable to bind TensorRT output", spec.name);
             outputs.emplace(spec.name, std::move(tensor));
         }
 
         for (const auto& spec : signature_.inputs) {
             const Tensor& tensor = inputs.at(spec.name);
+            if (tensor.deviceData) continue;
             const auto error = cudaMemcpyAsync(buffers_.at(spec.name).device,
                                                tensor.data<std::byte>(), tensor.byteSize(),
                                                cudaMemcpyHostToDevice, stream_);
@@ -282,6 +304,7 @@ public:
             return failureResult<TensorMap>(ErrorCode::BackendFailure, "TensorRT enqueueV3 failed");
         }
         for (auto& [name, tensor] : outputs) {
+            if (tensor.deviceData) continue;
             const auto error = cudaMemcpyAsync(tensor.bytes.data(), buffers_.at(name).device, tensor.byteSize(),
                                                cudaMemcpyDeviceToHost, stream_);
             if (error != cudaSuccess) return cudaStatus(error, "cudaMemcpyAsync D2H for " + name);
@@ -484,7 +507,7 @@ private:
         signature_ = {};
     }
 
-    TensorRTLogger logger_;
+    TensorRTLogger& logger_{runtimeLogger()};
     BackendConfig config_;
     TensorSignature signature_;
     nvinfer1::IRuntime* runtime_{nullptr};
@@ -513,6 +536,7 @@ Result<void> TensorRTBackend::probe(ExecutionProvider provider, int deviceId) {
     return {};
 }
 Result<TensorMap> TensorRTBackend::infer(const TensorMap& inputs) { return impl_->infer(inputs); }
+Result<TensorMap> TensorRTBackend::inferDevice(const TensorMap& inputs) { return impl_->infer(inputs, true); }
 const TensorSignature& TensorRTBackend::signature() const noexcept { return impl_->signature(); }
 int TensorRTBackend::maxBatchSize() const noexcept { return impl_->maxBatchSize(); }
 

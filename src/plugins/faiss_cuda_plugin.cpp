@@ -181,3 +181,17 @@ extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_faiss_query_v1(uint3
     *api = {sizeof(*api), 1, &probe, &create, &destroy, &search, &error};
     return 0;
 }
+
+namespace {
+int32_t ANOM_PLUGIN_CALL searchDevice(void* p, int32_t device, int64_t count,
+    const float* queries, int32_t neighbors, float* distances, int64_t* labels) {
+    auto* instance = static_cast<Instance*>(p);
+    if (!instance || device != instance->device)
+        return fail(ErrorCode::InvalidArgument, "Faiss device pointer belongs to another device");
+    return search(p, count, queries, neighbors, distances, labels);
+}
+}
+extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_faiss_query_device_v1(uint32_t version, anom_faiss_device_api_v1* api) {
+    if (version != 1 || !api || api->struct_size < sizeof(*api)) return -1;
+    *api = {sizeof(*api), 1, searchDevice}; return 0;
+}

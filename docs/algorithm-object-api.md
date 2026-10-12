@@ -90,6 +90,12 @@ Loading checks the package's algorithm and returns
 
 ## Fitting and future extensions
 
+PatchCore also exposes an outer `variant` enum: `ANOM_PATCHCORE_ORIGINAL`,
+`ANOM_PATCHCORE_MAHALANOBIS`, and `ANOM_PATCHCORE_SUBSPACE_AD`. It occupies a reserved ABI v4
+slot, preserving object size and method offsets. Select before create/load and
+keep it fixed until release. See [PatchCore variants](patchcore-variants.md) for
+fitting, model-package versions and feature-graph requirements.
+
 `anom_patchcore_init` and `anom_padim_init` populate both inference and fitting
 methods. Call `object.create(&object, &options)`, `add_batch`, `get_progress`,
 `save_checkpoint`, `load_checkpoint`, `cancel`, and `finalize` directly on the

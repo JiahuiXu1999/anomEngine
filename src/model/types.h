@@ -110,6 +110,8 @@ struct ExecutionInfo {
     ExecutionProvider searchProvider{ExecutionProvider::Default};
     int searchDeviceId{-1};
     bool searchFallbackOccurred{false};
+    ExecutionProvider computeProvider{ExecutionProvider::Default};
+    bool deviceTensorPath{false};
 };
 
 }  // namespace anom::model

@@ -1,4 +1,5 @@
 #include "plugin_api/anom_backend_plugin.h"
+#include "plugin_api/anom_device_plugin.h"
 
 #include "backends/backend.h"
 #include "infrastructure/utf8_path.h"
@@ -34,6 +35,7 @@ struct Instance {
 struct BatchOwner {
     TensorMap tensors;
     std::vector<anom_plugin_tensor_view_v1> views;
+    std::vector<anom_device_tensor_view_v1> deviceViews;
 };
 
 int32_t fail(Instance* instance, const Status& status) {
@@ -218,6 +220,69 @@ void ANOM_PLUGIN_CALL releaseBatch(anom_plugin_tensor_batch_v1* batch) {
     *batch = {};
 }
 
+int32_t ANOM_PLUGIN_CALL inferDevice(
+    void* opaque, const anom_device_tensor_view_v1* inputs, std::size_t inputCount,
+    anom_device_batch_v1* outBatch) {
+    auto* instance = static_cast<Instance*>(opaque);
+    if (!instance || !outBatch || (inputCount != 0 && !inputs)) {
+        return fail(instance, Status::error(ErrorCode::InvalidArgument,
+                                            "Backend inference arguments are invalid"));
+    }
+    *outBatch = {};
+    try {
+        TensorMap converted;
+        converted.reserve(inputCount);
+        for (std::size_t i = 0; i < inputCount; ++i) {
+            const auto& view = inputs[i].view;
+            if (inputs[i].device_id < -1) return fail(instance, Status::error(ErrorCode::InvalidArgument, "Invalid device id"));
+            if (!view.name_utf8 || !validDataType(view.data_type) ||
+                (view.rank != 0 && !view.dimensions) ||
+                (view.byte_size != 0 && !view.data)) {
+                return fail(instance, Status::error(ErrorCode::InvalidArgument,
+                                                    "Backend input tensor view is invalid"));
+            }
+            Tensor tensor;
+            tensor.dtype = static_cast<DataType>(view.data_type);
+            if (view.rank != 0)
+                tensor.shape.dims.assign(view.dimensions, view.dimensions + view.rank);
+            if (inputs[i].device_id >= 0) {
+                tensor.deviceData = const_cast<void*>(view.data);
+                tensor.deviceId = inputs[i].device_id;
+                tensor.externalByteSize = view.byte_size;
+            } else tensor.setExternalView(view.data, view.byte_size);
+            converted.emplace(view.name_utf8, std::move(tensor));
+        }
+
+        auto inferred = instance->backend->inferDevice(converted);
+        if (!inferred) return fail(instance, inferred.status());
+        auto owner = std::make_unique<BatchOwner>();
+        owner->tensors = std::move(inferred.value());
+        owner->deviceViews.reserve(owner->tensors.size());
+        for (const auto& [name, tensor] : owner->tensors) {
+            owner->deviceViews.push_back({{name.c_str(), static_cast<int32_t>(tensor.dtype),
+                                    tensor.shape.dims.data(), tensor.shape.dims.size(),
+                                    tensor.deviceData ? tensor.deviceData : tensor.data<std::byte>(), tensor.byteSize()}, tensor.deviceData ? tensor.deviceId : -1});
+        }
+        outBatch->tensors = owner->deviceViews.data();
+        outBatch->count = owner->deviceViews.size();
+        outBatch->owner = owner.release();
+        instance->lastError.clear();
+        return 0;
+    } catch (const std::bad_alloc&) {
+        return fail(instance, Status::error(ErrorCode::OutOfMemory,
+                                            "Out of memory during backend inference"));
+    } catch (const std::exception& error) {
+        instance->lastError = error.what();
+        return static_cast<int32_t>(ErrorCode::InternalError);
+    }
+}
+
+void ANOM_PLUGIN_CALL releaseDeviceBatch(anom_device_batch_v1* batch) {
+    if (!batch) return;
+    delete static_cast<BatchOwner*>(batch->owner);
+    *batch = {};
+}
+
 size_t ANOM_PLUGIN_CALL getLastError(void* opaque, char* buffer, size_t bufferSize) {
     const auto* instance = static_cast<const Instance*>(opaque);
     const std::string& message = instance ? instance->lastError : globalError;
@@ -259,3 +324,10 @@ extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_backend_query_execut
     *outApi = {sizeof(*outApi), 1, &createWithProvider, &probe};
     return 0;
 }
+
+#if defined(ANOM_BACKEND_TENSORRT)
+extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_backend_query_device_v1(uint32_t version, anom_backend_device_api_v1* api) {
+    if (version != 1 || !api || api->struct_size < sizeof(*api)) return -1;
+    *api = {sizeof(*api), 1, inferDevice, releaseDeviceBatch}; return 0;
+}
+#endif

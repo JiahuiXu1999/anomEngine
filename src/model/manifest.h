@@ -77,6 +77,8 @@ struct PostprocessConfig {
     int maxRegions{0};      // Report at most this many regions (0 = unlimited).
 };
 
+enum class PatchCoreVariant { Original = 0, Mahalanobis = 1, SubspaceAD = 2 };
+
 struct PatchCoreConfig {
     std::filesystem::path indexFile;
     std::vector<std::string> featureLayers;
@@ -88,6 +90,17 @@ struct PatchCoreConfig {
     float gaussianSigma{4.0F};
     bool sqrtDistances{true};
     bool weightedImageScore{true};
+    PatchCoreVariant variant{PatchCoreVariant::Original};
+    std::filesystem::path statisticsFile;
+    // SubAD can consume a fused NCHW embedding or average equal-shaped layer maps.
+    bool meanAggregation{false};
+    int pcaComponents{0}; // 0: MH min(128, D); SubAD explained-variance selection.
+    float explainedVariance{0.99F};
+    float covarianceShrinkage{0.01F};
+    float covarianceRegularization{1e-6F};
+    int memoryBankSize{1000};
+    int streamingChunkSize{1024};
+    float topScoreFraction{0.01F};
 };
 
 struct PadimConfig {

@@ -42,6 +42,8 @@ public:
     // and byteSize(), not bytes. Their shared owners retain storage across later
     // inference calls and destruction of the backend wrapper.
     virtual Result<TensorMap> infer(const TensorMap& inputs) = 0;
+    virtual bool supportsDeviceTensors() const noexcept { return false; }
+    virtual Result<TensorMap> inferDevice(const TensorMap&) { return Status::error(ErrorCode::DeviceUnavailable, "Backend has no device tensor extension"); }
     [[nodiscard]] virtual const TensorSignature& signature() const noexcept = 0;
     [[nodiscard]] virtual int maxBatchSize() const noexcept = 0;
 };

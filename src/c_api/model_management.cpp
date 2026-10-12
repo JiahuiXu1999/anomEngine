@@ -40,6 +40,8 @@
 #  include "pipeline/patchcore.h"
 #endif
 #include "processing/preprocessor.h"
+#include "compute/gpu_compute.h"
+#include "retrieval/search_execution.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -73,6 +75,7 @@ using anom::model::IRuntimeBackend;
 using anom::model::ModelPackage;
 using anom::model::PadimConfig;
 using anom::model::PatchCoreConfig;
+using anom::model::PatchCoreVariant;
 #if ANOM_ENGINE_HAS_PADIM
 using anom::model::PadimPipeline;
 using anom::model::PadimPipelineConfig;
@@ -136,9 +139,11 @@ struct anom_fitter {
     enum class Kind { PatchCore, Padim };
 
     ModelPackage package;
+    PatchCoreConfig patchcoreConfig;
     std::filesystem::path pluginDirectory;
     std::unique_ptr<IRuntimeBackend> backend;
     std::unique_ptr<ImagePreprocessor> preprocessor;
+    std::shared_ptr<anom::model::GpuCompute> compute;
 #if ANOM_ENGINE_HAS_PATCHCORE
     std::unique_ptr<PatchCorePipeline> patchcore;
 #endif
@@ -307,7 +312,8 @@ Result<void> copyTemplateTree(const std::filesystem::path& source,
 }
 
 Result<void> writeChecksummedManifest(const std::filesystem::path& root,
-                                      const CalibrationData* calibration) {
+                                      const CalibrationData* calibration,
+                                      const PatchCoreConfig* patchcore = nullptr) {
     const auto manifestPath = root / "manifest.json";
     std::ifstream stream(manifestPath, std::ios::binary);
     if (!stream) {
@@ -323,6 +329,23 @@ Result<void> writeChecksummedManifest(const std::filesystem::path& root,
                              "Model manifest root must be an object");
     }
 
+    if (patchcore) {
+        using Value = anom::model::json::Value;
+        auto& algorithm = document.value().asObject().at("algorithm").asObject();
+        algorithm["variant"] = Value(std::string(patchcore->variant == PatchCoreVariant::Original ? "original" :
+            patchcore->variant == PatchCoreVariant::Mahalanobis ? "mh" : "subad"));
+        if (patchcore->variant != PatchCoreVariant::SubspaceAD) algorithm["index"] = Value(genericUtf8(patchcore->indexFile));
+        else algorithm.erase("index");
+        if (patchcore->variant != PatchCoreVariant::Original) {
+            document.value().asObject()["schema_version"] = Value(2.0);
+            algorithm["statistics"] = Value(genericUtf8(patchcore->statisticsFile));
+            // A new score distribution needs its own calibration.
+            auto& post = document.value().asObject()["postprocess"];
+            if (!post.isObject()) post = Value(Value::Object{});
+            post.asObject()["normalize"] = Value(false);
+            post.asObject()["threshold"] = Value(false);
+        } else algorithm.erase("statistics");
+    }
     if (calibration) {
         auto& rootObject = document.value().asObject();
         auto found = rootObject.find("postprocess");
@@ -397,8 +420,14 @@ Result<void> validateReferencedArtifacts(const ModelPackage& package) {
     }
     if (manifest.algorithm == AlgorithmType::PatchCore) {
         const auto& config = std::get<PatchCoreConfig>(manifest.algorithmConfig);
-        auto artifact = package.resolveArtifact(config.indexFile, true);
-        if (!artifact) return artifact.status();
+        if (config.variant != PatchCoreVariant::SubspaceAD) {
+            auto artifact = package.resolveArtifact(config.indexFile, true);
+            if (!artifact) return artifact.status();
+        }
+        if (config.variant != PatchCoreVariant::Original) {
+            auto artifact = package.resolveArtifact(config.statisticsFile, true);
+            if (!artifact) return artifact.status();
+        }
     } else if (manifest.algorithm == AlgorithmType::Padim) {
         const auto& config = std::get<PadimConfig>(manifest.algorithmConfig);
         auto statistics = package.resolveArtifact(config.statisticsFile, true);
@@ -422,7 +451,8 @@ Result<void> validateReferencedArtifacts(const ModelPackage& package) {
 Result<void> commitPackage(const std::filesystem::path& templateRoot,
                            const std::vector<ArtifactOverlay>& artifacts,
                            const std::filesystem::path& requestedOutput,
-                           const CalibrationData* calibration = nullptr) {
+                           const CalibrationData* calibration = nullptr,
+                           const PatchCoreConfig* patchcore = nullptr) {
     try {
         if (requestedOutput.empty() || !requestedOutput.has_filename()) {
             return Status::error(ErrorCode::InvalidArgument,
@@ -466,7 +496,7 @@ Result<void> commitPackage(const std::filesystem::path& templateRoot,
                                        std::filesystem::copy_options::overwrite_existing);
         }
 
-        auto checksummed = writeChecksummedManifest(staging, calibration);
+        auto checksummed = writeChecksummedManifest(staging, calibration, patchcore);
         if (!checksummed) return checksummed.status();
         auto package = ModelPackage::load(staging);
         if (!package) return package.status();
@@ -775,8 +805,9 @@ extern "C" ANOM_ENGINE_API void ANOM_CALL anom_package_builder_destroy(
     delete builder;
 }
 
-extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_create(
-    const anom_fitter_options_t* options, anom_fitter_t** outFitter) {
+static anom_status_t createFitter(
+    const anom_fitter_options_t* options, anom_fitter_t** outFitter,
+    std::optional<PatchCoreVariant> variant = std::nullopt) {
     anomLastError.clear();
     if (!outFitter) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Fitter output pointer is null");
     *outFitter = nullptr;
@@ -813,9 +844,32 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_create(
 
         if (algorithm == AlgorithmType::PatchCore) {
 #if ANOM_ENGINE_HAS_PATCHCORE
-            const auto& config =
-                std::get<PatchCoreConfig>(fitter->package.manifest().algorithmConfig);
+            fitter->patchcoreConfig = std::get<PatchCoreConfig>(fitter->package.manifest().algorithmConfig);
+            auto& config = fitter->patchcoreConfig;
+            const auto sourceVariant = config.variant;
+            if (variant) config.variant = *variant;
+            if (config.indexFile.empty()) config.indexFile = "memory_bank.faiss";
+            if (config.statisticsFile.empty()) config.statisticsFile = "patchcore_statistics.bin";
+            const auto safeOutput = [&](const std::filesystem::path& path) {
+                return safeRelativePath(path) && path.lexically_normal() != "manifest.json" &&
+                    path.lexically_normal() != fitter->package.manifest().runtime.onnxFile.lexically_normal() &&
+                    path.lexically_normal() != fitter->package.manifest().runtime.engineFile.lexically_normal();
+            };
+            if (!safeOutput(config.indexFile) || !safeOutput(config.statisticsFile) ||
+                config.indexFile.lexically_normal() == config.statisticsFile.lexically_normal())
+                return fail(ANOM_STATUS_INVALID_MODEL_PACKAGE, "PatchCore artifact paths collide or escape the package");
+            if (options->reserved[0] > 2) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Invalid fitting compute mode");
+            const bool gpuBackend = fitter->package.manifest().runtime.backend == RuntimeBackend::TensorRT;
+            if (options->reserved[0] == 2 && !gpuBackend)
+                return fail(ANOM_STATUS_INVALID_ARGUMENT, "CUDA fitting requires a TensorRT template");
+            if (gpuBackend && options->reserved[0] != 1) {
+                auto compute = anom::model::GpuCompute::load(fitter->package.manifest().runtime.deviceId, fitter->pluginDirectory);
+                if (compute) fitter->compute = std::move(compute.value());
+                else if (options->reserved[0] == 2 || !anom::model::retryableSearchFailure(compute.status().code)) return fail(compute.status());
+            }
             PatchCorePipelineConfig fitConfig;
+            fitConfig.compute = fitter->compute;
+            fitConfig.statisticalConfig = config;
             fitConfig.embeddingDimension = config.embeddingDimension;
             fitConfig.coresetSamplingRatio =
                 options->patchcore_coreset_sampling_ratio > 0.0F
@@ -838,7 +892,8 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_create(
             fitter->kind = anom_fitter::Kind::PatchCore;
             auto existing = fitter->package.resolveArtifact(config.indexFile, false);
             if (!existing) return fail(existing.status());
-            if (std::filesystem::is_regular_file(existing.value())) {
+            if (config.variant == PatchCoreVariant::Original && sourceVariant == PatchCoreVariant::Original &&
+                std::filesystem::is_regular_file(existing.value())) {
                 auto imported = fitter->patchcore->loadMemoryBank(existing.value());
                 if (!imported) return fail(imported.status());
                 fitter->collectedItems.store(imported.value(), std::memory_order_relaxed);
@@ -890,6 +945,11 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_create(
     }
 }
 
+extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_create(
+    const anom_fitter_options_t* options, anom_fitter_t** outFitter) {
+    return createFitter(options, outFitter);
+}
+
 extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_add_batch(
     anom_fitter_t* fitter, const anom_image_t* images, size_t imageCount) {
     anomLastError.clear();
@@ -922,7 +982,9 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_add_batch(
             const std::size_t end = std::min(converted.size(), begin + chunkSize);
             std::vector<cv::Mat> chunk(converted.begin() + static_cast<std::ptrdiff_t>(begin),
                                        converted.begin() + static_cast<std::ptrdiff_t>(end));
-            auto preprocessed = fitter->preprocessor->process(chunk);
+            Result<anom::model::PreprocessedBatch> preprocessed = fitter->compute
+                ? fitter->compute->processImages(chunk, fitter->package.manifest().input)
+                : fitter->preprocessor->process(chunk);
             if (!preprocessed) {
                 fitter->stage.store(ANOM_FIT_STAGE_READY, std::memory_order_release);
                 return fail(preprocessed.status());
@@ -930,7 +992,10 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_add_batch(
             TensorMap inputs;
             inputs.emplace(fitter->package.manifest().input.tensorName,
                            std::move(preprocessed.value().tensor));
-            auto outputs = fitter->backend->infer(inputs);
+            if (fitter->compute && !fitter->backend->supportsDeviceTensors())
+                for (auto& item : inputs) item.second = fitter->compute->download(item.second);
+            auto outputs = fitter->compute && fitter->backend->supportsDeviceTensors()
+                ? fitter->backend->inferDevice(inputs) : fitter->backend->infer(inputs);
             if (!outputs) {
                 fitter->stage.store(ANOM_FIT_STAGE_READY, std::memory_order_release);
                 return fail(outputs.status());
@@ -938,8 +1003,7 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_add_batch(
             Result<void> added;
             if (fitter->kind == anom_fitter::Kind::PatchCore) {
 #if ANOM_ENGINE_HAS_PATCHCORE
-                const auto& config = std::get<PatchCoreConfig>(
-                    fitter->package.manifest().algorithmConfig);
+                const auto& config = fitter->patchcoreConfig;
                 added = fitter->patchcore->addBackendOutputs(
                     outputs.value(), fitter->package.manifest().outputs, config);
 #else
@@ -1116,17 +1180,22 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_finalize(
         std::vector<ArtifactOverlay> artifacts;
         if (fitter->kind == anom_fitter::Kind::PatchCore) {
 #if ANOM_ENGINE_HAS_PATCHCORE
-            const auto& config = std::get<PatchCoreConfig>(
-                fitter->package.manifest().algorithmConfig);
+            const auto& config = fitter->patchcoreConfig;
             const auto artifact = artifactRoot / config.indexFile;
             std::filesystem::create_directories(artifact.parent_path());
-            auto saved = fitter->patchcore->saveMemoryBank(artifact);
+            const auto statistics = artifactRoot / config.statisticsFile;
+            if (config.variant != PatchCoreVariant::Original)
+                std::filesystem::create_directories(statistics.parent_path());
+            auto saved = fitter->patchcore->saveArtifacts(artifact, statistics);
             if (!saved) {
                 fitter->stage.store(ANOM_FIT_STAGE_READY, std::memory_order_release);
                 return fail(saved.status());
             }
             fitter->collectedItems.store(saved.value(), std::memory_order_relaxed);
-            artifacts.push_back({artifact, config.indexFile});
+            if (config.variant != PatchCoreVariant::SubspaceAD)
+                artifacts.push_back({artifact, config.indexFile});
+            if (config.variant != PatchCoreVariant::Original)
+                artifacts.push_back({statistics, config.statisticsFile});
 #else
             fitter->stage.store(ANOM_FIT_STAGE_READY, std::memory_order_release);
             return fail(ANOM_STATUS_UNSUPPORTED,
@@ -1153,7 +1222,8 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_fitter_finalize(
                         "PaDiM fitting is not available in this build");
 #endif
         }
-        auto committed = commitPackage(fitter->package.root(), artifacts, output);
+        auto committed = commitPackage(fitter->package.root(), artifacts, output, nullptr,
+            fitter->kind == anom_fitter::Kind::PatchCore ? &fitter->patchcoreConfig : nullptr);
         if (!committed) {
             fitter->stage.store(ANOM_FIT_STAGE_READY, std::memory_order_release);
             return fail(committed.status());
@@ -1178,7 +1248,7 @@ namespace {
 template <typename Fitter>
 anom_fitter_t* typedFitter(Fitter* fitter, const char* name) {
     if (!fitter || fitter->struct_size < sizeof(Fitter) ||
-        !fitter->internal || !runtimeState(fitter)->fitter) {
+        !fitter->internal || !runtimeState(fitter)->fitter || !anom::c_api::validVariant(fitter)) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " fitter is not initialized");
         return nullptr;
     }
@@ -1188,7 +1258,7 @@ anom_fitter_t* typedFitter(Fitter* fitter, const char* name) {
 template <typename Fitter>
 const anom_fitter_t* typedFitter(const Fitter* fitter, const char* name) {
     if (!fitter || fitter->struct_size < sizeof(Fitter) ||
-        !fitter->internal || !runtimeState(fitter)->fitter) {
+        !fitter->internal || !runtimeState(fitter)->fitter || !anom::c_api::validVariant(fitter)) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " fitter is not initialized");
         return nullptr;
     }
@@ -1208,6 +1278,7 @@ anom_status_t attachTypedFitter(Fitter* destination,
     if (!attachRuntime(destination->internal, implementation)) {
         return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while creating algorithm state");
     }
+    anom::c_api::rememberVariant(destination);
     return ANOM_STATUS_OK;
 }
 
@@ -1247,6 +1318,7 @@ anom_status_t ANOM_CALL patchcoreFitterCreate(
     anomLastError.clear();
     if (!fitter || fitter->struct_size < sizeof(*fitter) ||
         (fitter->internal && runtimeState(fitter)->fitter) ||
+        !validVariant(fitter) ||
         !options || options->struct_size < sizeof(*options)) {
         return fail(ANOM_STATUS_INVALID_ARGUMENT,
                     "PatchCore fitter object or options are invalid");
@@ -1263,8 +1335,9 @@ anom_status_t ANOM_CALL patchcoreFitterCreate(
     converted.patchcore_max_exact_distance_evaluations =
         options->max_exact_distance_evaluations;
     converted.random_seed = options->random_seed;
+    converted.reserved[0] = options->compute_mode;
     anom_fitter_t* implementation = nullptr;
-    const auto created = anom_fitter_create(&converted, &implementation);
+    const auto created = createFitter(&converted, &implementation, static_cast<PatchCoreVariant>(fitter->variant));
     if (created != ANOM_STATUS_OK) return created;
     return attachTypedFitter(fitter, implementation, anom_fitter::Kind::PatchCore,
                              "PatchCore");

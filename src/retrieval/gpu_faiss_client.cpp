@@ -31,6 +31,13 @@ Result<std::unique_ptr<GpuFaissClient>> GpuFaissClient::load(const std::filesyst
     if (!query || query(1, &api) != 0 || api.abi_version != 1 || api.struct_size < sizeof(api) ||
         !api.probe || !api.create || !api.destroy || !api.search || !api.get_last_error)
         return Status::error(ErrorCode::PluginAbiMismatch, "Invalid GPU Faiss plugin ABI");
+    auto deviceQuery = reinterpret_cast<anom_faiss_query_device_v1_fn>(client->library_->symbol("anom_faiss_query_device_v1"));
+    if (deviceQuery) {
+        auto& extension = client->deviceApi_;
+        extension.struct_size = sizeof(extension);
+        if (deviceQuery(1, &extension) || extension.abi_version != 1 || extension.struct_size < sizeof(extension) || !extension.search)
+            return Status::error(ErrorCode::PluginAbiMismatch, "Invalid Faiss device extension");
+    }
     auto status = api.probe(device);
     if (status) return failure(api, nullptr, status);
     const auto encoded = pathToUtf8(index);
@@ -38,6 +45,12 @@ Result<std::unique_ptr<GpuFaissClient>> GpuFaissClient::load(const std::filesyst
     if (status) return failure(api, client->instance_, status);
     if (!client->instance_) return Status::error(ErrorCode::AdapterFailure, "GPU Faiss returned a null instance");
     return client;
+}
+Result<void> GpuFaissClient::searchDevice(int device, int64_t count, const float* queries, int neighbors, float* distances, int64_t* labels) const {
+    if (!deviceApi_.search) return Status::error(ErrorCode::DeviceUnavailable, "Faiss has no device extension");
+    auto code = deviceApi_.search(instance_, device, count, queries, neighbors, distances, labels);
+    if (code) return failure(api_, instance_, code);
+    return {};
 }
 GpuFaissClient::~GpuFaissClient() { if (instance_) api_.destroy(instance_); }
 Result<void> GpuFaissClient::search(int64_t count, const float* queries, int neighbors,

@@ -18,6 +18,13 @@ typedef struct anom_faiss_api_v1 {
     size_t (ANOM_PLUGIN_CALL *get_last_error)(void* instance, char* buffer, size_t size);
 } anom_faiss_api_v1;
 typedef int32_t (ANOM_PLUGIN_CALL *anom_faiss_query_v1_fn)(uint32_t version, anom_faiss_api_v1* api);
+/* Optional synchronous CUDA-query/CUDA-distance, host-label extension. */
+typedef struct anom_faiss_device_api_v1 {
+    uint32_t struct_size, abi_version;
+    int32_t (ANOM_PLUGIN_CALL *search)(void*, int32_t device, int64_t count,
+        const float* device_queries, int32_t neighbors, float* device_distances, int64_t* host_labels);
+} anom_faiss_device_api_v1;
+typedef int32_t (ANOM_PLUGIN_CALL *anom_faiss_query_device_v1_fn)(uint32_t, anom_faiss_device_api_v1*);
 #ifdef __cplusplus
 }
 #endif

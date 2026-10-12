@@ -10,6 +10,8 @@ public:
         int device, int dimension, int64_t count, int neighbors,
         const std::filesystem::path& pluginDirectory);
     ~GpuFaissClient();
+    bool supportsDevice() const { return deviceApi_.search != nullptr; }
+    Result<void> searchDevice(int device, int64_t count, const float* queries, int neighbors, float* distances, int64_t* labels) const;
     GpuFaissClient(const GpuFaissClient&) = delete;
     GpuFaissClient& operator=(const GpuFaissClient&) = delete;
     Result<void> search(int64_t count, const float* queries, int neighbors,
@@ -18,6 +20,7 @@ private:
     GpuFaissClient() = default;
     std::shared_ptr<plugins::DynamicLibrary> library_;
     anom_faiss_api_v1 api_{};
+    anom_faiss_device_api_v1 deviceApi_{};
     void* instance_{nullptr};
 };
 }

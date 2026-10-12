@@ -9,6 +9,12 @@ extern "C" {
 
 typedef struct anom_patchcore anom_patchcore_t;
 
+typedef enum anom_patchcore_variant {
+    ANOM_PATCHCORE_ORIGINAL = 0,
+    ANOM_PATCHCORE_MAHALANOBIS = 1,
+    ANOM_PATCHCORE_SUBSPACE_AD = 2
+} anom_patchcore_variant_t;
+
 typedef struct anom_patchcore_fitter_options {
     uint32_t struct_size;
     const char* template_package_utf8;
@@ -17,7 +23,8 @@ typedef struct anom_patchcore_fitter_options {
     size_t projection_dimension;
     uint64_t max_exact_distance_evaluations;
     uint32_t random_seed;
-    uint32_t reserved[8];
+    uint32_t compute_mode; /* 0 follows template backend, 1 CPU, 2 require CUDA */
+    uint32_t reserved[7];
 } anom_patchcore_fitter_options_t;
 
 /*
@@ -30,7 +37,10 @@ typedef struct anom_patchcore_fitter_options {
 struct anom_patchcore {
     uint32_t struct_size;
     void* internal;
-    uint32_t reserved[8];
+    /* Select before create/load. Keep fixed until release. Zero selects original.
+     * Occupies one formerly reserved uint32_t slot; ABI v4 offsets are unchanged. */
+    anom_patchcore_variant_t variant;
+    uint32_t reserved[7];
     uint32_t abi_version; /* Set by init to ANOM_ENGINE_ABI_VERSION. */
 
     anom_status_t (ANOM_CALL *load)(

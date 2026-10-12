@@ -11,6 +11,11 @@ public:
         : cpu_(std::move(cpu)), path_(std::move(path)) {}
     int dimension() const { return cpu_->d; }
     Result<void> enableGpu(const SearchExecutionConfig& config, int neighbors);
+    bool supportsDevice() const { return gpu_ && gpu_->supportsDevice(); }
+    Result<void> searchDevice(int device, int64_t count, const float* queries, int neighbors, float* distances, int64_t* labels) const {
+        if (!supportsDevice()) return Status::error(ErrorCode::DeviceUnavailable, "No device search");
+        return gpu_->searchDevice(device, count, queries, neighbors, distances, labels);
+    }
     void useCpu() { gpu_.reset(); }
     void search(faiss::idx_t count, const float* queries, int neighbors,
                 float* distances, faiss::idx_t* labels) const;

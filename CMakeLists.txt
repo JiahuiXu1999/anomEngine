@@ -26,6 +26,7 @@ endif()
 
 option(ANOM_ENABLE_TENSORRT "Build the TensorRT backend plugin" ON)
 option(ANOM_ENABLE_ONNXRUNTIME "Build the ONNX Runtime backend plugin" ON)
+option(ANOM_ENABLE_CUDA_COMPUTE "Build optional PatchCore CUDA compute plugin" OFF)
 option(ANOM_ENABLE_FAISS_GPU "Build the optional GPU Faiss retrieval plugin" OFF)
 option(ANOM_BUILD_ALGO_DIRECT "Build the direct-prediction algorithm plugin" ON)
 option(ANOM_BUILD_ALGO_EFFICIENTAD "Build the EfficientAD algorithm plugin" ON)
@@ -251,6 +252,7 @@ endif()
 # Core library and public C API -------------------------------------------------
 
 set(ANOM_CORE_SOURCES
+    "${ANOM_PRIVATE_SOURCE_ROOT}/compute/gpu_compute.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/adapter.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/backends/backend_factory.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/infrastructure/json.cpp"
@@ -287,7 +289,8 @@ if(ANOM_BUILD_ALGO_PATCHCORE OR ANOM_BUILD_ALGO_PADIM)
 endif()
 if(ANOM_BUILD_ALGO_PATCHCORE)
     target_sources(anom_engine PRIVATE
-        "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/patchcore.cpp")
+        "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/patchcore.cpp"
+        "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/patchcore_statistics.cpp")
     target_link_libraries(anom_engine PRIVATE anom::faiss anom::faiss_c)
 endif()
 if(ANOM_BUILD_ALGO_PADIM)
@@ -369,6 +372,8 @@ endif()
 if(ANOM_BUILD_ALGO_PATCHCORE)
     anom_add_algorithm(patchcore ANOM_ALGORITHM_PATCHCORE
         "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/patchcore_adapter.cpp"
+        "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/patchcore_statistics.cpp"
+        "${ANOM_PRIVATE_SOURCE_ROOT}/compute/gpu_compute.cpp"
         "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/feature_utils.cpp" ${ANOM_FAISS_SEARCH_SOURCES})
     target_link_libraries(anom_algo_patchcore PRIVATE anom::faiss anom::faiss_c ${CMAKE_DL_LIBS})
 endif()
@@ -464,6 +469,20 @@ if(ANOM_ENABLE_FAISS_GPU)
     list(APPEND ANOM_SEARCH_TARGETS anom_search_faiss_cuda)
 endif()
 
+if(ANOM_ENABLE_CUDA_COMPUTE)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    add_library(anom_compute_cuda MODULE "${ANOM_PRIVATE_SOURCE_ROOT}/compute/cuda_compute.cu")
+    target_include_directories(anom_compute_cuda PRIVATE "${ANOM_PRIVATE_SOURCE_ROOT}")
+    target_link_libraries(anom_compute_cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cusolver)
+    if(MSVC)
+        target_compile_options(anom_compute_cuda PRIVATE -Xcompiler=/utf-8)
+    endif()
+    set_target_properties(anom_compute_cuda PROPERTIES PREFIX "" CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON INSTALL_RPATH "${ANOM_ORIGIN_RPATH}")
+    list(APPEND ANOM_SEARCH_TARGETS anom_compute_cuda)
+endif()
+
 if(BUILD_TESTING)
     add_subdirectory(tests/object_api)
 
@@ -484,6 +503,7 @@ if(BUILD_TESTING)
         "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/efficientad.cpp"
         "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/padim.cpp"
         "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/patchcore.cpp"
+        "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/patchcore_statistics.cpp"
         "${ANOM_PRIVATE_SOURCE_ROOT}/pipeline/spade.cpp")
     target_include_directories(anom_training_test_support PUBLIC "${ANOM_PRIVATE_SOURCE_ROOT}")
     target_link_libraries(anom_training_test_support PUBLIC
@@ -604,6 +624,22 @@ if(WIN32)
     if(ANOM_ENABLE_ONNXRUNTIME)
         list(APPEND ANOM_RUNTIME_FILES
             "$<TARGET_FILE:anom::onnxruntime>")
+    endif()
+
+    if(ANOM_ENABLE_CUDA_COMPUTE)
+        # CUDA 13 uses bin/x64; earlier toolkits use bin. Deploy only dependencies
+        # of our compute module, including cuSOLVER's cuSPARSE/nvJitLink closure.
+        file(GLOB _anom_compute_runtime CONFIGURE_DEPENDS
+            "${CUDAToolkit_BIN_DIR}/cudart64*.dll" "${CUDAToolkit_BIN_DIR}/cublas*64*.dll"
+            "${CUDAToolkit_BIN_DIR}/cusolver64*.dll" "${CUDAToolkit_BIN_DIR}/cusparse64*.dll"
+            "${CUDAToolkit_BIN_DIR}/nvJitLink*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/cudart64*.dll" "${CUDAToolkit_BIN_DIR}/x64/cublas*64*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/cusolver64*.dll" "${CUDAToolkit_BIN_DIR}/x64/cusparse64*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/nvJitLink*.dll")
+        list(APPEND ANOM_RUNTIME_FILES ${_anom_compute_runtime})
+        add_custom_command(TARGET anom_compute_cuda POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${_anom_compute_runtime}
+                "$<TARGET_FILE_DIR:anom_compute_cuda>" COMMAND_EXPAND_LISTS VERBATIM)
     endif()
 
     function(anom_deploy_runtime_dependencies target_name)

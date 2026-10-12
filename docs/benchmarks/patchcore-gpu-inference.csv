@@ -1,0 +1,4 @@
+mode,total_ms,preprocess_ms,backend_ms,adapter_ms,postprocess_ms,compute_provider,faiss_provider
+CPU,66.4049,0.2799,37.9979,28.0728,0.0533,1,1
+TensorRT_CPU_stages,25.6405,0.2669,3.4643,21.8193,0.0889,1,1
+TensorRT_CUDA_stages,12.2145,0.2881,2.9026,8.8934,0.1289,2,1

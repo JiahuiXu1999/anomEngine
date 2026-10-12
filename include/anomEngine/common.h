@@ -106,6 +106,8 @@ enum {
  * AUTO allows CPU selection even with FALLBACK_NONE.
  * Selection is fixed after load/warmup; predict never retries on another device.
  */
+enum { ANOM_COMPUTE_AUTO = 0, ANOM_COMPUTE_CPU = 1, ANOM_COMPUTE_CUDA = 2 };
+
 typedef struct anom_algorithm_options {
     uint32_t struct_size;
     const char* plugin_directory_utf8;
@@ -115,7 +117,9 @@ typedef struct anom_algorithm_options {
     anom_fallback_policy_t fallback;
     anom_precision_t precision;
     const char* backend_utf8;
-    uint32_t reserved[8];
+    /* PatchCore compute: 0 auto (optional CUDA on GPU), 1 CPU, 2 require CUDA. */
+    uint32_t compute_mode;
+    uint32_t reserved[7];
 } anom_algorithm_options_t;
 
 /* Probe one backend/provider/device without loading a model. backend_utf8 must
@@ -217,7 +221,9 @@ typedef struct anom_execution_info {
     int32_t faiss_provider;
     int32_t faiss_device_id; /* -1 unless CUDA */
     int32_t faiss_fallback_occurred;
-    uint32_t reserved[5];
+    int32_t compute_provider; /* 0 not applicable, 1 CPU, 2 CUDA */
+    int32_t device_tensor_path; /* network outputs stay on CUDA */
+    uint32_t reserved[3];
 } anom_execution_info_t;
 
 enum {

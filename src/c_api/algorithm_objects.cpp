@@ -116,8 +116,12 @@ ANOM_ENGINE_API anom_status_t ANOM_CALL anom_padim_init(anom_padim_t* self) {
 ANOM_ENGINE_API anom_status_t ANOM_CALL anom_patchcore_init(anom_patchcore_t* self) {
     const auto status = validateInit(self);
     if (status != ANOM_STATUS_OK) return status;
+    static_assert(sizeof(anom_patchcore_variant_t) == sizeof(uint32_t));
+    if (self->variant < ANOM_PATCHCORE_ORIGINAL || self->variant > ANOM_PATCHCORE_SUBSPACE_AD)
+        return initError("Unknown PatchCore variant");
 
     anom_patchcore_t initialized{};
+    initialized.variant = self->variant;
     initialized.struct_size = self->struct_size;
     initialized.abi_version = ANOM_ENGINE_ABI_VERSION;
     initialized.load = anom::c_api::patchcoreLoad;

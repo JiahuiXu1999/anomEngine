@@ -1,4 +1,5 @@
 #include "model/inference_session.h"
+#include "compute/gpu_compute.h"
 
 #include "adapters/adapter.h"
 #include "backends/backend.h"
@@ -175,6 +176,8 @@ InferenceSession::~InferenceSession() = default;
 Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
     const std::filesystem::path& modelPackage, const LoadOptions& options) {
     try {
+    if (options.computeMode < 0 || options.computeMode > 2)
+        return Status::error(ErrorCode::InvalidArgument, "Invalid compute mode");
     auto package = ModelPackage::load(modelPackage);
     if (!package) return package.status();
 
@@ -295,6 +298,27 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
             session->executionInfo_.fallbackReason += "Faiss CUDA -> CPU: " + search.value().fallbackReason;
         }
 
+        if (manifest.algorithm == AlgorithmType::PatchCore) {
+            session->executionInfo_.computeProvider = ExecutionProvider::Cpu;
+            if (options.computeMode == 2 && !onGpu)
+                return Status::error(ErrorCode::InvalidArgument, "CUDA compute requires a GPU network request");
+            if (onGpu && options.computeMode != 1) {
+                auto compute = GpuCompute::load(selectedConfig.deviceId, options.pluginDirectory);
+                auto configured = compute ? session->adapter_->configureCompute(selectedConfig.deviceId, options.pluginDirectory)
+                                          : Result<void>(compute.status());
+                if (!configured) {
+                    if (options.computeMode == 2 || !retryableSearchFailure(configured.status().code)) return configured.status();
+                    session->executionInfo_.fallbackOccurred = true;
+                    if (!session->executionInfo_.fallbackReason.empty()) session->executionInfo_.fallbackReason += " | ";
+                    session->executionInfo_.fallbackReason += "Optional CUDA compute -> CPU: " + configured.status().describe();
+                } else {
+                    session->compute_ = std::move(compute.value());
+                    session->executionInfo_.computeProvider = ExecutionProvider::Cuda;
+                    session->executionInfo_.deviceTensorPath = session->backend_->supportsDeviceTensors();
+                }
+            }
+        }
+
         if (options.warmup) {
             auto warmed = session->warmup();
             if (!warmed) {
@@ -352,14 +376,18 @@ Result<PredictionBatch> InferenceSession::predictBatch(const std::vector<cv::Mat
 
 Result<PredictionBatch> InferenceSession::predictChunk(const std::vector<cv::Mat>& images) {
     const auto totalBegin = Clock::now();
-    auto preprocessed = preprocessor_->process(images);
+    Result<PreprocessedBatch> preprocessed = compute_
+        ? compute_->processImages(images, package_.manifest().input)
+        : preprocessor_->process(images);
     if (!preprocessed) return preprocessed.status();
     const auto preprocessEnd = Clock::now();
 
     TensorMap inputs;
     inputs.emplace(package_.manifest().input.tensorName, std::move(preprocessed.value().tensor));
     const auto backendBegin = Clock::now();
-    auto outputs = backend_->infer(inputs);
+    if (compute_ && !backend_->supportsDeviceTensors())
+        for (auto& item : inputs) item.second = compute_->download(item.second);
+    auto outputs = compute_ && backend_->supportsDeviceTensors() ? backend_->inferDevice(inputs) : backend_->infer(inputs);
     if (!outputs) return outputs.status();
     const auto backendEnd = Clock::now();
 

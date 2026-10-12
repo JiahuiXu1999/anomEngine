@@ -18,6 +18,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #ifndef ANOM_ENGINE_VERSION_STRING
@@ -316,7 +317,7 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_create_v2(
     anom_session_t** outSession) {
     anomLastError.clear();
     if (outSession) *outSession = nullptr;
-    constexpr std::size_t minimumSize = offsetof(anom_session_options_v2_t, reserved);
+    constexpr std::size_t minimumSize = offsetof(anom_session_options_v2_t, compute_mode);
     if (options && options->struct_size < minimumSize) {
         return fail(ANOM_STATUS_INVALID_ARGUMENT,
                     "Session v2 options struct_size is incompatible");
@@ -359,6 +360,10 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_create_v2(
         const anom_status_t backendStatus = parseBackend(options->backend_utf8,
                                                          converted.backend);
         if (backendStatus != ANOM_STATUS_OK) return backendStatus;
+        if (options->struct_size >= offsetof(anom_session_options_v2_t, compute_mode) + sizeof(options->compute_mode)) {
+            if (options->compute_mode > 2) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Invalid compute mode");
+            converted.computeMode = static_cast<int>(options->compute_mode);
+        }
         converted.warmup = options->warmup != 0;
         const anom_status_t directoryStatus =
             setPluginDirectory(options->plugin_directory_utf8, converted);
@@ -419,10 +424,14 @@ extern "C" ANOM_ENGINE_API anom_status_t ANOM_CALL anom_session_get_execution_in
     outInfo->precision = publicPrecision(info.precision);
     outInfo->fallback_occurred = info.fallbackOccurred ? 1 : 0;
     outInfo->fallback_reason_utf8 = info.fallbackReason.c_str();
-    if (structSize >= offsetof(anom_execution_info_t, reserved)) {
+    if (structSize >= offsetof(anom_execution_info_t, compute_provider)) {
         outInfo->faiss_provider = static_cast<int32_t>(info.searchProvider);
         outInfo->faiss_device_id = info.searchDeviceId;
         outInfo->faiss_fallback_occurred = info.searchFallbackOccurred ? 1 : 0;
+    }
+    if (structSize >= offsetof(anom_execution_info_t, reserved)) {
+        outInfo->compute_provider = static_cast<int32_t>(info.computeProvider);
+        outInfo->device_tensor_path = info.deviceTensorPath ? 1 : 0;
     }
     return ANOM_STATUS_OK;
 }
@@ -507,6 +516,14 @@ anom_status_t loadAlgorithm(const char* modelPackage,
     try {
         auto inspected = ModelPackage::load(pathFromUtf8(modelPackage));
         if (!inspected) return fail(inspected.status());
+        if (!anom::c_api::validVariant(algorithm))
+            return fail(ANOM_STATUS_INVALID_ARGUMENT, "Invalid or changed PatchCore variant; release before changing it");
+        if constexpr (std::is_same_v<Algorithm, anom_patchcore_t>) {
+            if (inspected.value().manifest().algorithm == AlgorithmType::PatchCore &&
+                static_cast<int>(std::get<anom::model::PatchCoreConfig>(inspected.value().manifest().algorithmConfig).variant) !=
+                    static_cast<int>(algorithm->variant))
+                return fail(ANOM_STATUS_ALGORITHM_MISMATCH, "PatchCore variant does not match the model package");
+        }
         if (inspected.value().manifest().algorithm != expected) {
             const std::string actual =
                 anom::model::toString(inspected.value().manifest().algorithm);
@@ -527,6 +544,7 @@ anom_status_t loadAlgorithm(const char* modelPackage,
     if (!attachRuntime(algorithm->internal, session)) {
         return fail(ANOM_STATUS_OUT_OF_MEMORY, "Out of memory while creating algorithm state");
     }
+    anom::c_api::rememberVariant(algorithm);
     return ANOM_STATUS_OK;
 }
 
@@ -541,7 +559,7 @@ void releaseAlgorithm(Algorithm* algorithm) {
 template <typename Algorithm>
 anom_session_t* algorithmSession(Algorithm* algorithm, const char* name) {
     if (!algorithm || algorithm->struct_size < sizeof(Algorithm) ||
-        !algorithm->internal || !runtimeState(algorithm)->session) {
+        !algorithm->internal || !runtimeState(algorithm)->session || !anom::c_api::validVariant(algorithm)) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " object is not loaded");
         return nullptr;
     }
@@ -551,7 +569,7 @@ anom_session_t* algorithmSession(Algorithm* algorithm, const char* name) {
 template <typename Algorithm>
 const anom_session_t* algorithmSession(const Algorithm* algorithm, const char* name) {
     if (!algorithm || algorithm->struct_size < sizeof(Algorithm) ||
-        !algorithm->internal || !runtimeState(algorithm)->session) {
+        !algorithm->internal || !runtimeState(algorithm)->session || !anom::c_api::validVariant(algorithm)) {
         fail(ANOM_STATUS_INVALID_ARGUMENT, std::string(name) + " object is not loaded");
         return nullptr;
     }

@@ -17,6 +17,9 @@ public:
     virtual Result<SearchExecutionInfo> configureSearch(const SearchExecutionConfig&) {
         return SearchExecutionInfo{};
     }
+    virtual Result<void> configureCompute(int, const std::filesystem::path&) {
+        return Status::error(ErrorCode::DeviceUnavailable, "Algorithm has no CUDA compute extension");
+    }
     virtual Result<void> validateSignature(const TensorSignature& signature) const = 0;
     virtual Result<RawPredictionBatch> predict(
         const TensorMap& outputs,

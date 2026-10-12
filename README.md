@@ -22,6 +22,8 @@ pluggable algorithms, and TensorRT/ONNX Runtime backends.
 - Algorithm plugins currently cover Direct Prediction, EfficientAD, DFKDE,
   PaDiM, PatchCore, SPADE, and YOLO-style prediction outputs.
 - Backend plugins support TensorRT on NVIDIA GPUs and ONNX Runtime on CPUs.
+- PatchCore's outer `variant` enum selects original, MH or SubAD through the same
+  fitting/inference object. See [PatchCore variants](docs/patchcore-variants.md).
 - A manifest-driven model package declares tensor bindings, preprocessing,
   postprocessing, runtime settings, and optional SHA-256 artifact checksums.
 - Shared postprocessing produces image scores, anomaly maps, masks, connected
@@ -114,6 +116,9 @@ ctest --preset linux-gcc-ninja-release
 
 CPU/GPU selection, runtime probing and fallback are documented in
 [CPU / GPU execution modes](docs/cpu-gpu-modes.md).
+PatchCore also provides an optional CUDA compute plugin for preprocessing, feature
+aggregation, coreset/PCA fitting, statistical transforms and anomaly maps; see
+[PatchCore GPU pipeline and benchmarks](docs/patchcore-gpu.md).
 
 For a smaller ONNX Runtime-only build without the FAISS-based plugins or tests:
 

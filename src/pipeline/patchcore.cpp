@@ -1,4 +1,6 @@
 #include "pipeline/patchcore.h"
+#include "compute/gpu_compute.h"
+#include "pipeline/patchcore_statistics.h"
 
 #include "adapters/feature_utils.h"
 
@@ -83,7 +85,13 @@ std::vector<float> projectFeatures(const std::vector<float>& features,
 }  // namespace
 
 PatchCorePipeline::PatchCorePipeline(PatchCorePipelineConfig config)
-    : config_(std::move(config)) {}
+    : config_(std::move(config)) {
+    if (config_.statisticalConfig.variant != PatchCoreVariant::Original) {
+        config_.statisticalConfig.embeddingDimension = config_.embeddingDimension;
+        statistical_ = std::make_unique<PatchCoreStatisticalFit>(config_.statisticalConfig, config_.compute);
+    }
+}
+PatchCorePipeline::~PatchCorePipeline() = default;
 
 Result<void> PatchCorePipeline::addBackendOutputs(
     const TensorMap& outputs,
@@ -93,10 +101,18 @@ Result<void> PatchCorePipeline::addBackendOutputs(
         return Status::error(ErrorCode::InvalidArgument,
                              "PatchCore pipeline and manifest embedding dimensions differ");
     }
-    auto embedding = feature::aggregateFeaturePyramid(
-        outputs, outputBindings, algorithmConfig.featureLayers, true,
-        algorithmConfig.poolingKernel, algorithmConfig.poolingStride,
-        algorithmConfig.poolingPadding);
+    if (config_.compute) {
+        try {
+            const auto device = config_.compute->aggregate(outputs, outputBindings, algorithmConfig);
+            const auto host = config_.compute->download(device);
+            const auto* data = host.data<float>();
+            return addFeatures(std::vector<float>(data, data + host.byteSize() / sizeof(float)),
+                               host.byteSize() / sizeof(float) / config_.embeddingDimension);
+        } catch (const std::exception& e) {
+            return Status::error(ErrorCode::CudaFailure, "GPU training aggregation failed", e.what());
+        }
+    }
+    auto embedding = aggregatePatchCoreFeatures(outputs, outputBindings, algorithmConfig);
     if (!embedding) return embedding.status();
     return addEmbedding(embedding.value());
 }
@@ -119,6 +135,7 @@ Result<void> PatchCorePipeline::addEmbedding(const Tensor& embedding) {
 
 Result<void> PatchCorePipeline::addFeatures(const std::vector<float>& features,
                                             std::size_t vectorCount) {
+    if (statistical_) return statistical_->add(features, vectorCount);
     auto valid = validateConfig(config_);
     if (!valid) return valid.status();
     const std::size_t dimension = static_cast<std::size_t>(config_.embeddingDimension);
@@ -142,6 +159,8 @@ Result<void> PatchCorePipeline::addFeatures(const std::vector<float>& features,
 }
 
 Result<std::vector<float>> PatchCorePipeline::buildCoreset() const {
+    if (statistical_) return Status::error(ErrorCode::UnsupportedAlgorithm,
+        "Statistical PatchCore variants require saveArtifacts");
     auto valid = validateConfig(config_);
     if (!valid) return valid.status();
     const std::size_t dimension = static_cast<std::size_t>(config_.embeddingDimension);
@@ -154,6 +173,40 @@ Result<std::vector<float>> PatchCorePipeline::buildCoreset() const {
         1, static_cast<std::size_t>(std::ceil(
                static_cast<double>(vectorCount) * config_.coresetSamplingRatio)));
     if (targetCount >= vectorCount) return features_;
+
+    if (config_.compute) {
+        try {
+            if (vectorCount > INT_MAX || dimension > INT_MAX || targetCount > INT_MAX)
+                return Status::error(ErrorCode::InvalidArgument, "GPU coreset exceeds int32 dimensions");
+            const auto rank = std::min(config_.projectionDimension, dimension);
+            Tensor selection;
+            if (rank < dimension) {
+                std::mt19937 random(config_.randomSeed);
+                std::normal_distribution<float> normal(0.0F, 1.0F / std::sqrt(static_cast<float>(rank)));
+                std::vector<float> projection(dimension * rank);
+                for (auto& value : projection) value = normal(random);
+                selection = config_.compute->project(features_, static_cast<int>(vectorCount),
+                    static_cast<int>(dimension), projection, static_cast<int>(rank));
+            } else {
+                Tensor input;
+                input.shape.dims = {static_cast<int64_t>(vectorCount), static_cast<int64_t>(dimension)};
+                input.setExternalView(features_.data(), features_.size() * sizeof(float));
+                selection = config_.compute->upload(input);
+            }
+            std::mt19937 random(config_.randomSeed);
+            std::uniform_int_distribution<std::size_t> first(0, vectorCount - 1);
+            auto indices = config_.compute->coreset(selection, static_cast<int>(targetCount), static_cast<int>(first(random)));
+            std::vector<float> coreset;
+            coreset.reserve(targetCount * dimension);
+            for (auto index : indices) {
+                const auto* begin = features_.data() + static_cast<std::size_t>(index) * dimension;
+                coreset.insert(coreset.end(), begin, begin + dimension);
+            }
+            return coreset;
+        } catch (const std::exception& e) {
+            return Status::error(ErrorCode::CudaFailure, "GPU coreset failed", e.what());
+        }
+    }
 
     if (targetCount > config_.maxExactDistanceEvaluations / vectorCount) {
         std::vector<std::size_t> candidates(vectorCount);
@@ -230,6 +283,8 @@ Result<std::vector<float>> PatchCorePipeline::buildCoreset() const {
 
 Result<std::size_t> PatchCorePipeline::loadMemoryBank(
     const std::filesystem::path& path) {
+    if (statistical_) return Status::error(ErrorCode::UnsupportedAlgorithm,
+        "Restore statistical fitting from a checkpoint, not a transformed memory bank");
     auto valid = validateConfig(config_);
     if (!valid) return valid.status();
     try {
@@ -278,6 +333,7 @@ Result<std::size_t> PatchCorePipeline::saveMemoryBank(
 
 Result<void> PatchCorePipeline::saveCheckpoint(
     const std::filesystem::path& path) const {
+    if (statistical_) return statistical_->saveCheckpoint(path);
     auto valid = validateConfig(config_);
     if (!valid) return valid.status();
     if (features_.empty()) {
@@ -308,6 +364,7 @@ Result<void> PatchCorePipeline::saveCheckpoint(
 
 Result<void> PatchCorePipeline::loadCheckpoint(
     const std::filesystem::path& path) {
+    if (statistical_) return statistical_->loadCheckpoint(path);
     auto valid = validateConfig(config_);
     if (!valid) return valid.status();
     std::ifstream stream(path, std::ios::binary);
@@ -345,9 +402,19 @@ Result<void> PatchCorePipeline::loadCheckpoint(
     return {};
 }
 
-void PatchCorePipeline::clear() noexcept { features_.clear(); }
+Result<std::size_t> PatchCorePipeline::saveArtifacts(
+    const std::filesystem::path& index, const std::filesystem::path& statistics) const {
+    if (statistical_) return statistical_->saveArtifacts(index, statistics);
+    return saveMemoryBank(index);
+}
+
+void PatchCorePipeline::clear() noexcept {
+    features_.clear();
+    if (statistical_) statistical_->clear();
+}
 
 std::size_t PatchCorePipeline::featureCount() const noexcept {
+    if (statistical_) return statistical_->count();
     return config_.embeddingDimension > 0
                ? features_.size() / static_cast<std::size_t>(config_.embeddingDimension)
                : 0;

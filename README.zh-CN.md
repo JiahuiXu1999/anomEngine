@@ -15,6 +15,7 @@
 - 每种算法都是独立的公共对象（`anom_patchcore_t`、`anom_padim_t`、`anom_yolo_t` 等），算法专属能力无需扩充统一会话接口即可独立演进。
 - 算法插件目前支持 Direct Prediction、EfficientAD、DFKDE、PaDiM、PatchCore、SPADE，以及 YOLO 风格的预测输出。
 - 后端插件支持 NVIDIA GPU 上的 TensorRT，以及 CPU 上的 ONNX Runtime。
+- PatchCore 对象通过外层 `variant` 枚举选择原版、MH 或 SubAD；三者共用拟合与推理接口。配置与实现范围见 [PatchCore 可选模式](docs/patchcore-variants.md)。
 - 通过模型包清单声明张量绑定、预处理、后处理、运行时设置，以及可选的模型资源 SHA-256 校验和。
 - 共享后处理模块通过统一的结果接口提供图像分数、异常图、掩码、连通区域和耗时信息。
 - 提供适用于 Windows MSVC 和 Linux GCC / Clang 的 CMake 预设。
@@ -111,7 +112,8 @@ cmake --build build/local --config Release
 
 CPU/GPU 选择、运行时探测和回退规则见
 [`docs/cpu-gpu-modes.md`](docs/cpu-gpu-modes.md)。GPU 模式支持神经网络推理和
-PatchCore/SPADE 的 Faiss 检索；预处理、特征变换和后处理仍在 CPU。
+PatchCore/SPADE 的 Faiss 检索。PatchCore 另有可选的 CUDA 预处理、特征聚合、coreset、
+统计变换和异常图计算，见 [PatchCore GPU 链路](docs/patchcore-gpu.md)。
 Faiss 的独立插件、构建依赖、回退和执行信息见
 [`docs/faiss-cpu-gpu.md`](docs/faiss-cpu-gpu.md)。
 

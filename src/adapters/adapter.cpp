@@ -1,4 +1,5 @@
 #include "adapters/adapter.h"
+#include "plugin_api/anom_device_plugin.h"
 
 #include "infrastructure/utf8_path.h"
 #include "plugin_api/anom_algorithm_plugin.h"
@@ -32,8 +33,15 @@ std::string pluginError(const anom_algorithm_plugin_api_v1& api, void* instance)
 class DynamicAdapter final : public IModelAdapter {
 public:
     DynamicAdapter(std::shared_ptr<plugins::DynamicLibrary> library,
-                   anom_algorithm_plugin_api_v1 api, anom_algorithm_execution_api_v1 execution, void* instance)
-        : library_(std::move(library)), api_(api), execution_(execution), instance_(instance) {}
+                   anom_algorithm_plugin_api_v1 api, anom_algorithm_execution_api_v1 execution, void* instance,
+                   bool hasSearch)
+        : library_(std::move(library)), api_(api), execution_(execution), instance_(instance), hasSearch_(hasSearch) {
+        auto query = reinterpret_cast<anom_algorithm_query_device_v1_fn>(library_->symbol("anom_algorithm_query_device_v1"));
+        if (query) {
+            deviceApi_.struct_size = sizeof(deviceApi_);
+            if (query(1, &deviceApi_) || deviceApi_.abi_version != 1 || deviceApi_.struct_size < sizeof(deviceApi_) || !deviceApi_.configure || !deviceApi_.predict) deviceApi_ = {};
+        }
+    }
 
     ~DynamicAdapter() override {
         if (instance_ && api_.destroy) api_.destroy(instance_);
@@ -42,9 +50,7 @@ public:
     Result<void> loadAssets(const ModelPackage&) override { return {}; }
 
     Result<SearchExecutionInfo> configureSearch(const SearchExecutionConfig& config) override {
-        const bool faiss = std::strcmp(api_.algorithm_name_utf8, "patchcore") == 0 ||
-                           std::strcmp(api_.algorithm_name_utf8, "spade") == 0;
-        if (!faiss) return SearchExecutionInfo{};
+        if (!hasSearch_) return SearchExecutionInfo{};
         if (!execution_.configure_search) {
             SearchExecutionInfo info;
             info.provider = ExecutionProvider::Cpu;
@@ -77,6 +83,13 @@ public:
         return info;
     }
 
+    Result<void> configureCompute(int device, const std::filesystem::path& directory) override {
+        if (!deviceApi_.configure) return Status::error(ErrorCode::DeviceUnavailable, "Algorithm has no device extension");
+        auto path = pathToUtf8(directory);
+        auto status = deviceApi_.configure(instance_, device, path.c_str());
+        if (status) return Status::error(pluginErrorCode(status), "Compute configuration failed", pluginError(api_, instance_));
+        computeEnabled_ = device >= 0; return {};
+    }
     Result<void> validateSignature(const TensorSignature& signature) const override {
         std::vector<anom_plugin_tensor_spec_v1> inputs;
         std::vector<anom_plugin_tensor_spec_v1> outputs;
@@ -107,13 +120,23 @@ public:
         for (const auto& [name, tensor] : outputs) {
             views.push_back({name.c_str(), static_cast<int32_t>(tensor.dtype),
                              tensor.shape.dims.data(), tensor.shape.dims.size(),
-                             tensor.data<std::byte>(), tensor.byteSize()});
+                             tensor.deviceData ? tensor.deviceData : tensor.data<std::byte>(), tensor.byteSize()});
         }
 
         anom_plugin_prediction_batch_v1 batch{};
-        const int32_t status = api_.predict(
-            instance_, views.data(), views.size(), modelInputSize.width,
-            modelInputSize.height, &batch);
+        int32_t status;
+        if (computeEnabled_) {
+            std::vector<anom_device_tensor_view_v1> deviceViews;
+            for (const auto& view : views) {
+                const auto& tensor = outputs.at(view.name_utf8);
+                deviceViews.push_back({view, tensor.deviceData ? tensor.deviceId : -1});
+            }
+            status = deviceApi_.predict(instance_, deviceViews.data(), deviceViews.size(), modelInputSize.width, modelInputSize.height, &batch);
+        } else {
+            for (const auto& item : outputs) if (item.second.deviceData)
+                return Status::error(ErrorCode::InvalidArgument, "Device tensor requires negotiated algorithm extension");
+            status = api_.predict(instance_, views.data(), views.size(), modelInputSize.width, modelInputSize.height, &batch);
+        }
         if (status != 0) {
             return Status::error(pluginErrorCode(status), "Algorithm plugin inference failed",
                                  pluginError(api_, instance_));
@@ -152,7 +175,10 @@ private:
     std::shared_ptr<plugins::DynamicLibrary> library_;
     anom_algorithm_plugin_api_v1 api_{};
     anom_algorithm_execution_api_v1 execution_{};
+    anom_algorithm_device_api_v1 deviceApi_{};
+    bool computeEnabled_{false};
     void* instance_{nullptr};
+    bool hasSearch_{false};
 };
 
 }  // namespace
@@ -210,8 +236,11 @@ Result<std::unique_ptr<IModelAdapter>> createAdapter(
         return Status::error(pluginErrorCode(created), "Algorithm plugin creation failed",
                              message);
     }
+    const bool hasSearch = package.manifest().algorithm == AlgorithmType::SPADE ||
+        (package.manifest().algorithm == AlgorithmType::PatchCore &&
+         std::get<PatchCoreConfig>(package.manifest().algorithmConfig).variant != PatchCoreVariant::SubspaceAD);
     return std::unique_ptr<IModelAdapter>(
-        new DynamicAdapter(std::move(library.value()), api, execution, instance));
+        new DynamicAdapter(std::move(library.value()), api, execution, instance, hasSearch));
 }
 
 }  // namespace anom::model

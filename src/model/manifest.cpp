@@ -203,8 +203,8 @@ ModelManifest parseManifest(const json::Value& value) {
     const Reader root(value);
     ModelManifest manifest;
     manifest.schemaVersion = root.required("schema_version").integer();
-    if (manifest.schemaVersion != 1) {
-        throw ManifestError("Only manifest schema_version 1 is supported", "$.schema_version");
+    if (manifest.schemaVersion != 1 && manifest.schemaVersion != 2) {
+        throw ManifestError("Only manifest schema_version 1 and 2 are supported", "$.schema_version");
     }
 
     const Reader model = root.required("model");
@@ -380,7 +380,21 @@ ModelManifest parseManifest(const json::Value& value) {
 
     if (manifest.algorithm == AlgorithmType::PatchCore) {
         PatchCoreConfig config;
-        config.indexFile = algorithm.required("index").string();
+        const auto variant = optionalOr<std::string>(algorithm, "variant", "original", &Reader::string);
+        if (variant == "original") config.variant = PatchCoreVariant::Original;
+        else if (variant == "mh") config.variant = PatchCoreVariant::Mahalanobis;
+        else if (variant == "subad") config.variant = PatchCoreVariant::SubspaceAD;
+        else throw ManifestError("Unknown PatchCore variant", "$.algorithm.variant");
+        if (config.variant != PatchCoreVariant::Original && manifest.schemaVersion < 2)
+            throw ManifestError("Statistical PatchCore variants require schema_version 2", "$.schema_version");
+        config.indexFile = config.variant == PatchCoreVariant::SubspaceAD
+            ? optionalPath(algorithm, "index") : algorithm.required("index").string();
+        if (config.variant != PatchCoreVariant::Original)
+            config.statisticsFile = algorithm.required("statistics").string();
+        const auto aggregation = optionalOr<std::string>(algorithm, "feature_aggregation", "concat", &Reader::string);
+        if (aggregation != "concat" && aggregation != "mean")
+            throw ManifestError("Unknown feature aggregation", "$.algorithm.feature_aggregation");
+        config.meanAggregation = aggregation == "mean";
         config.featureLayers = algorithm.required("feature_layers").stringArray();
         config.embeddingDimension = algorithm.required("embedding_dimension").integer();
         config.numNeighbors = optionalOr<int>(algorithm, "num_neighbors", 1, &Reader::integer);
@@ -390,6 +404,21 @@ ModelManifest parseManifest(const json::Value& value) {
         config.gaussianSigma = optionalOr<float>(algorithm, "gaussian_sigma", 4.0F, &Reader::real);
         config.sqrtDistances = optionalOr<bool>(algorithm, "sqrt_distances", true, &Reader::boolean);
         config.weightedImageScore = optionalOr<bool>(algorithm, "weighted_image_score", true, &Reader::boolean);
+        config.pcaComponents = optionalOr<int>(algorithm, "pca_components", 0, &Reader::integer);
+        config.explainedVariance = optionalOr<float>(algorithm, "explained_variance", 0.99F, &Reader::real);
+        config.covarianceShrinkage = optionalOr<float>(algorithm, "covariance_shrinkage", 0.01F, &Reader::real);
+        config.covarianceRegularization = optionalOr<float>(algorithm, "covariance_regularization", 1e-6F, &Reader::real);
+        config.memoryBankSize = optionalOr<int>(algorithm, "memory_bank_size", 1000, &Reader::integer);
+        config.streamingChunkSize = optionalOr<int>(algorithm, "streaming_chunk_size", 1024, &Reader::integer);
+        config.topScoreFraction = optionalOr<float>(algorithm, "top_score_fraction", 0.01F, &Reader::real);
+        if (config.pcaComponents < 0 || config.pcaComponents > config.embeddingDimension ||
+            !std::isfinite(config.explainedVariance) || config.explainedVariance <= 0 || config.explainedVariance >= 1 ||
+            !std::isfinite(config.covarianceShrinkage) || config.covarianceShrinkage < 0 || config.covarianceShrinkage > 1 ||
+            !std::isfinite(config.covarianceRegularization) || config.covarianceRegularization <= 0 ||
+            config.memoryBankSize <= 0 || config.streamingChunkSize <= 0 ||
+            config.memoryBankSize > std::numeric_limits<int>::max() - config.streamingChunkSize ||
+            !std::isfinite(config.topScoreFraction) || config.topScoreFraction <= 0 || config.topScoreFraction > 1)
+            throw ManifestError("Invalid PatchCore statistical parameters", "$.algorithm");
         requirePositive(config.embeddingDimension, "$.algorithm.embedding_dimension");
         requirePositive(config.numNeighbors, "$.algorithm.num_neighbors");
         requirePositive(config.poolingKernel, "$.algorithm.pooling_kernel");

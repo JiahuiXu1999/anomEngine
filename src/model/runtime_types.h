@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -43,12 +44,16 @@ struct Tensor {
 
     // Plugin adapters/backends may consume a read-only view owned by another
     // module. Regular tensors continue to store their bytes in `bytes`.
+    // Explicit synchronous CUDA view. Never exposed through host data().
+    void* deviceData{nullptr};
+    int deviceId{-1};
     const std::byte* externalData{nullptr};
     std::size_t externalByteSize{0};
     std::shared_ptr<void> externalOwner;
 
     template <typename T>
     T* data() {
+        if (deviceData) throw std::logic_error("Host access to a device Tensor");
         // Mutable access materializes a private copy; const readers keep the
         // shared plugin output without copying or modifying another consumer.
         if (externalData) {
@@ -64,18 +69,21 @@ struct Tensor {
 
     template <typename T>
     const T* data() const {
+        if (deviceData) throw std::logic_error("Host access to a device Tensor");
         return reinterpret_cast<const T*>(externalData ? externalData : bytes.data());
     }
 
     void setExternalView(const void* data, std::size_t size,
                          std::shared_ptr<void> owner = {}) noexcept {
+        deviceData = nullptr;
+        deviceId = -1;
         externalData = static_cast<const std::byte*>(data);
         externalByteSize = size;
         externalOwner = std::move(owner);
     }
 
     [[nodiscard]] std::size_t byteSize() const noexcept {
-        return externalData ? externalByteSize : bytes.size();
+        return (externalData || deviceData) ? externalByteSize : bytes.size();
     }
 };
 

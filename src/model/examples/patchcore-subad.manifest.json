@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "model": {"id": "patchcore-subad", "version": "1.0.0", "algorithm": "patchcore"},
+  "graph_contract": "feature_pyramid",
+  "input": {
+    "tensor": "input", "layout": "NCHW", "color": "RGB", "resize": [672, 672],
+    "interpolation": "cubic",
+    "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]
+  },
+  "runtime": {"backend": "onnxruntime", "onnx": "dinov2_embedding.onnx", "max_batch_size": 1},
+  "outputs": {"embedding": "embedding"},
+  "algorithm": {
+    "type": "patchcore", "variant": "subad", "statistics": "patchcore_statistics.bin",
+    "feature_layers": ["embedding"], "embedding_dimension": 1536,
+    "feature_aggregation": "mean", "pooling_kernel": 1,
+    "pooling_stride": 1, "pooling_padding": 0,
+    "pca_components": 0, "explained_variance": 0.99,
+    "top_score_fraction": 0.01, "gaussian_sigma": 4
+  },
+  "postprocess": {"normalize": false, "threshold": false}
+}

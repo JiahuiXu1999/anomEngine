@@ -7,10 +7,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
 namespace anom::model {
+
+class PatchCoreStatisticalFit;
+class GpuCompute;
 
 struct PatchCorePipelineConfig {
     int embeddingDimension{0};
@@ -18,6 +22,8 @@ struct PatchCorePipelineConfig {
     std::size_t projectionDimension{128};
     std::size_t maxExactDistanceEvaluations{50'000'000};
     std::uint32_t randomSeed{42};
+    PatchCoreConfig statisticalConfig;
+    std::shared_ptr<GpuCompute> compute;
 };
 
 // Training-side PatchCore algorithm pipeline. Runtime inference remains in
@@ -26,6 +32,7 @@ struct PatchCorePipelineConfig {
 class PatchCorePipeline final {
 public:
     explicit PatchCorePipeline(PatchCorePipelineConfig config);
+    ~PatchCorePipeline();
 
     Result<void> addBackendOutputs(
         const TensorMap& outputs,
@@ -38,6 +45,8 @@ public:
     Result<std::vector<float>> buildCoreset() const;
     Result<std::size_t> loadMemoryBank(const std::filesystem::path& path);
     Result<std::size_t> saveMemoryBank(const std::filesystem::path& path) const;
+    Result<std::size_t> saveArtifacts(const std::filesystem::path& index,
+                                     const std::filesystem::path& statistics) const;
     Result<void> saveCheckpoint(const std::filesystem::path& path) const;
     Result<void> loadCheckpoint(const std::filesystem::path& path);
 
@@ -48,6 +57,7 @@ public:
 private:
     PatchCorePipelineConfig config_;
     std::vector<float> features_;
+    std::unique_ptr<PatchCoreStatisticalFit> statistical_;
 };
 
 }  // namespace anom::model

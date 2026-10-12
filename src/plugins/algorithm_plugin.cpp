@@ -1,4 +1,5 @@
 #include "plugin_api/anom_algorithm_plugin.h"
+#include "plugin_api/anom_device_plugin.h"
 
 #include "adapters/adapter.h"
 #include "infrastructure/utf8_path.h"
@@ -229,6 +230,70 @@ int32_t ANOM_PLUGIN_CALL predict(
     }
 }
 
+int32_t ANOM_PLUGIN_CALL predictDevice(
+    void* opaque, const anom_device_tensor_view_v1* outputs, std::size_t outputCount,
+    int32_t inputWidth, int32_t inputHeight, anom_plugin_prediction_batch_v1* outBatch) {
+    auto* instance = static_cast<Instance*>(opaque);
+    if (!instance || !outBatch || (outputCount != 0 && !outputs) ||
+        inputWidth <= 0 || inputHeight <= 0) {
+        return fail(instance, Status::error(ErrorCode::InvalidArgument,
+                                            "Plugin prediction arguments are invalid"));
+    }
+    *outBatch = {};
+    try {
+        TensorMap converted;
+        converted.reserve(outputCount);
+        for (std::size_t i = 0; i < outputCount; ++i) {
+            const auto& view = outputs[i].view;
+            if (outputs[i].device_id < -1) return fail(instance, Status::error(ErrorCode::InvalidArgument, "Invalid device id"));
+            if (!view.name_utf8 || !validDataType(view.data_type) ||
+                (view.rank != 0 && !view.dimensions) ||
+                (view.byte_size != 0 && !view.data)) {
+                return fail(instance, Status::error(ErrorCode::InvalidArgument,
+                                                    "Plugin tensor view is invalid"));
+            }
+            Tensor tensor;
+            tensor.dtype = static_cast<DataType>(view.data_type);
+            if (view.rank != 0)
+                tensor.shape.dims.assign(view.dimensions, view.dimensions + view.rank);
+            if (outputs[i].device_id >= 0) {
+                tensor.deviceData = const_cast<void*>(view.data);
+                tensor.deviceId = outputs[i].device_id;
+                tensor.externalByteSize = view.byte_size;
+            } else tensor.setExternalView(view.data, view.byte_size);
+            converted.emplace(view.name_utf8, std::move(tensor));
+        }
+        auto predicted = instance->adapter->predict(converted, cv::Size(inputWidth, inputHeight));
+        if (!predicted) return fail(instance, predicted.status());
+
+        auto owner = std::make_unique<BatchOwner>();
+        owner->predictions = std::move(predicted.value());
+        owner->views.reserve(owner->predictions.size());
+        for (const auto& prediction : owner->predictions) {
+            anom_plugin_raw_prediction_v1 view{};
+            view.score = prediction.score;
+            if (!prediction.anomalyMap.empty()) {
+                view.anomaly_map = prediction.anomalyMap.ptr<float>();
+                view.map_width = prediction.anomalyMap.cols;
+                view.map_height = prediction.anomalyMap.rows;
+                view.map_stride_elements = static_cast<int32_t>(prediction.anomalyMap.step1());
+            }
+            owner->views.push_back(view);
+        }
+        outBatch->predictions = owner->views.data();
+        outBatch->count = owner->views.size();
+        outBatch->owner = owner.release();
+        instance->lastError.clear();
+        return 0;
+    } catch (const std::bad_alloc&) {
+        return fail(instance, Status::error(ErrorCode::OutOfMemory,
+                                            "Out of memory during algorithm inference"));
+    } catch (const std::exception& error) {
+        instance->lastError = error.what();
+        return static_cast<int32_t>(ErrorCode::InternalError);
+    }
+}
+
 void ANOM_PLUGIN_CALL releaseBatch(anom_plugin_prediction_batch_v1* batch) {
     if (!batch) return;
     delete static_cast<BatchOwner*>(batch->owner);
@@ -274,6 +339,14 @@ int32_t ANOM_PLUGIN_CALL configureSearch(void* opaque, const anom_search_config_
         return fail(instance, Status::error(ErrorCode::InternalError, "Faiss configuration failed", error.what()));
     }
 }
+int32_t ANOM_PLUGIN_CALL configureCompute(void* p, int32_t device, const char* directory) {
+    auto* instance = static_cast<Instance*>(p);
+    if (!instance || device < -1) return fail(instance, Status::error(ErrorCode::InvalidArgument, "Invalid compute configuration"));
+    try {
+        auto configured = instance->adapter->configureCompute(device, directory ? pathFromUtf8(directory) : std::filesystem::path{});
+        return configured ? 0 : fail(instance, configured.status());
+    } catch (const std::exception& e) { return fail(instance, Status::error(ErrorCode::CudaFailure, e.what())); }
+}
 }  // namespace
 
 extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_algorithm_query_execution_v1(
@@ -302,3 +375,10 @@ extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_algorithm_plugin_que
     *outApi = api;
     return 0;
 }
+
+#if defined(ANOM_ALGORITHM_PATCHCORE)
+extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_algorithm_query_device_v1(uint32_t version, anom_algorithm_device_api_v1* api) {
+    if (version != 1 || !api || api->struct_size < sizeof(*api)) return -1;
+    *api = {sizeof(*api), 1, configureCompute, predictDevice}; return 0;
+}
+#endif

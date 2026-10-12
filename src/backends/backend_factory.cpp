@@ -2,6 +2,7 @@
 
 #include "infrastructure/utf8_path.h"
 #include "plugin_api/anom_backend_plugin.h"
+#include "plugin_api/anom_device_plugin.h"
 #include "plugins/dynamic_library.h"
 
 #include <cstring>
@@ -35,7 +36,14 @@ class DynamicBackend final : public IRuntimeBackend {
 public:
     DynamicBackend(std::shared_ptr<plugins::DynamicLibrary> library,
                    anom_backend_plugin_api_v1 api, anom_backend_execution_api_v1 execution)
-        : library_(std::move(library)), api_(api), execution_(execution) {}
+        : library_(std::move(library)), api_(api), execution_(execution) {
+        auto query = reinterpret_cast<anom_backend_query_device_v1_fn>(library_->symbol("anom_backend_query_device_v1"));
+        if (query) {
+            deviceApi_.struct_size = sizeof(deviceApi_);
+            if (query(1, &deviceApi_) || deviceApi_.abi_version != 1 || deviceApi_.struct_size < sizeof(deviceApi_) || !deviceApi_.infer || !deviceApi_.release_batch)
+                deviceApi_ = {};
+        }
+    }
 
     ~DynamicBackend() override = default;
 
@@ -66,6 +74,7 @@ public:
         converted.ort_graph_optimization = static_cast<int32_t>(config.ortGraphOptimization);
         converted.ort_execution_mode = static_cast<int32_t>(config.ortExecutionMode);
         converted.device_id = config.deviceId;
+        deviceId_ = config.deviceId;
         converted.intra_op_threads = config.intraOpThreads;
         converted.inter_op_threads = config.interOpThreads;
         converted.enable_memory_pattern = config.enableMemoryPattern ? 1 : 0;
@@ -192,6 +201,80 @@ public:
         return result;
     }
 
+    bool supportsDeviceTensors() const noexcept override { return deviceApi_.infer != nullptr; }
+    Result<TensorMap> inferDevice(const TensorMap& inputs) override {
+        if (!deviceApi_.infer) return Status::error(ErrorCode::DeviceUnavailable, "No backend device extension");
+        if (!instance_) {
+            return Status::error(ErrorCode::NotInitialized, "Backend plugin is not loaded");
+        }
+        std::vector<anom_device_tensor_view_v1> views;
+        views.reserve(inputs.size());
+        for (const auto& [name, tensor] : inputs) {
+            views.push_back({{name.c_str(), static_cast<int32_t>(tensor.dtype),
+                             tensor.shape.dims.data(), tensor.shape.dims.size(),
+                             tensor.deviceData ? tensor.deviceData : tensor.data<std::byte>(), tensor.byteSize()}, tensor.deviceData ? tensor.deviceId : -1});
+        }
+        anom_device_batch_v1 batch{};
+        const int32_t inferred = deviceApi_.infer(instance_, views.data(), views.size(), &batch);
+        if (inferred != 0) {
+            return Status::error(pluginErrorCode(inferred), "Backend plugin inference failed",
+                                 pluginError(api_, instance_));
+        }
+        if (batch.count != 0 && (!batch.tensors || !batch.owner)) {
+            if (batch.owner) deviceApi_.release_batch(&batch);
+            return Status::error(ErrorCode::BackendFailure,
+                                 "Backend plugin returned an invalid tensor batch");
+        }
+
+        struct BatchGuard {
+            const anom_backend_device_api_v1* api;
+            anom_device_batch_v1* batch;
+            ~BatchGuard() { if (batch->owner) api->release_batch(batch); }
+        } guard{&deviceApi_, &batch};
+
+        struct SharedBatch {
+            std::shared_ptr<void> instanceLifetime;
+            decltype(anom_backend_device_api_v1::release_batch) release{nullptr};
+            anom_device_batch_v1 batch{};
+            ~SharedBatch() { if (batch.owner) release(&batch); }
+        };
+        // Allocate before transferring ownership so an allocation failure still
+        // releases the plugin batch through guard.
+        auto owner = std::make_shared<SharedBatch>();
+        owner->instanceLifetime = instanceLifetime_;
+        owner->release = deviceApi_.release_batch;
+        owner->batch = batch;
+        batch = {};
+
+        TensorMap result;
+        result.reserve(owner->batch.count);
+        for (std::size_t i = 0; i < owner->batch.count; ++i) {
+            const auto& item = owner->batch.tensors[i];
+            const auto& view = item.view;
+            if (item.device_id != deviceId_) return Status::error(ErrorCode::BackendFailure, "Output device differs from backend device");
+            if (!view.name_utf8 || view.data_type < static_cast<int32_t>(DataType::Float32) ||
+                view.data_type > static_cast<int32_t>(DataType::Bool) ||
+                (view.rank != 0 && !view.dimensions) ||
+                (view.byte_size != 0 && !view.data)) {
+                return Status::error(ErrorCode::BackendFailure,
+                                     "Backend plugin returned an invalid tensor view");
+            }
+            Tensor tensor;
+            tensor.dtype = static_cast<DataType>(view.data_type);
+            if (view.rank != 0)
+                tensor.shape.dims.assign(view.dimensions, view.dimensions + view.rank);
+            auto elements = tensor.shape.elementCount();
+            if (!elements || elements.value() > SIZE_MAX / dataTypeSize(tensor.dtype) || elements.value() * dataTypeSize(tensor.dtype) != view.byte_size)
+                return Status::error(ErrorCode::BackendFailure, "Invalid device output shape");
+            tensor.deviceData = const_cast<void*>(view.data);
+            tensor.deviceId = item.device_id;
+            tensor.externalByteSize = view.byte_size;
+            tensor.externalOwner = owner;
+            result.emplace(view.name_utf8, std::move(tensor));
+        }
+        return result;
+    }
+
     const TensorSignature& signature() const noexcept override { return signature_; }
     int maxBatchSize() const noexcept override { return maxBatchSize_; }
 
@@ -233,10 +316,12 @@ private:
     std::shared_ptr<plugins::DynamicLibrary> library_;
     anom_backend_plugin_api_v1 api_{};
     anom_backend_execution_api_v1 execution_{};
+    anom_backend_device_api_v1 deviceApi_{};
     std::shared_ptr<void> instanceLifetime_;
     void* instance_{nullptr};
     TensorSignature signature_;
     int maxBatchSize_{0};
+    int deviceId_{0};
 };
 
 }  // namespace

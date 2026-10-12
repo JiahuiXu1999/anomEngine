@@ -9,6 +9,7 @@
 
 namespace anom::model {
 
+class GpuCompute;
 class AnomalyPostprocessor;
 class ImagePreprocessor;
 class IModelAdapter;
@@ -24,6 +25,7 @@ struct LoadOptions {
     PrecisionPreference precision{PrecisionPreference::Manifest};
     std::filesystem::path pluginDirectory;
     bool warmup{false};
+    int computeMode{0}; // 0 auto, 1 CPU, 2 require CUDA (PatchCore only)
 };
 
 class InferenceSession {
@@ -55,6 +57,7 @@ private:
     std::unique_ptr<IModelAdapter> adapter_;
     std::unique_ptr<ImagePreprocessor> preprocessor_;
     std::unique_ptr<AnomalyPostprocessor> postprocessor_;
+    std::shared_ptr<GpuCompute> compute_;
     ModelInfo modelInfo_;
     ExecutionInfo executionInfo_;
 };

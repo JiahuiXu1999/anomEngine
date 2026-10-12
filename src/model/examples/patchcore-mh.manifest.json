@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "model": {"id": "patchcore-mh", "version": "1.0.0", "algorithm": "patchcore"},
+  "graph_contract": "feature_pyramid",
+  "input": {
+    "tensor": "input", "layout": "NCHW", "color": "RGB",
+    "resize": [256, 256], "center_crop": [224, 224],
+    "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]
+  },
+  "runtime": {"backend": "onnxruntime", "onnx": "backbone.onnx", "max_batch_size": 4},
+  "outputs": {"layer2": "layer2", "layer3": "layer3"},
+  "algorithm": {
+    "type": "patchcore", "variant": "mh",
+    "index": "memory_bank.faiss", "statistics": "patchcore_statistics.bin",
+    "feature_layers": ["layer2", "layer3"], "embedding_dimension": 1536,
+    "feature_aggregation": "concat", "pooling_kernel": 3,
+    "pooling_stride": 1, "pooling_padding": 1,
+    "pca_components": 128, "covariance_shrinkage": 0.01,
+    "covariance_regularization": 0.000001,
+    "memory_bank_size": 1000, "streaming_chunk_size": 1024,
+    "num_neighbors": 1, "sqrt_distances": false,
+    "weighted_image_score": false, "gaussian_sigma": 4
+  },
+  "postprocess": {"normalize": false, "threshold": false}
+}

@@ -3,9 +3,9 @@
 The algorithm objects share the same C ABI in both modes. Device selection is a
 load-time policy; the backend and provider are separate internal choices. GPU
 means GPU neural-network inference and, for PatchCore/SPADE, GPU Faiss retrieval
-unless permitted loading fallback selects CPU. Preprocessing, feature transforms
-and postprocessing currently remain on CPU, and backend tensor outputs
-are returned in host memory. GPU neural-network inference always uses TensorRT;
+unless permitted loading fallback selects CPU. PatchCore can additionally select the optional CUDA compute plugin and negotiated
+device tensor extensions; see [PatchCore GPU computation](patchcore-gpu.md).
+Other algorithms continue using host tensors and CPU image/feature processing. GPU neural-network inference always uses TensorRT;
 ONNX Runtime is the CPU backend.
 
 ## Selection contract
@@ -127,10 +127,9 @@ once a runtime/device passes probing, load and inference failures fail the test.
 
 GPU Faiss is provided by the optional `anom_search_faiss_cuda` plugin, with host
 query/result buffers. See [Faiss CPU/GPU modes](faiss-cpu-gpu.md) for dependency,
-fallback and verification details. Device-resident tensors and GPU preprocessing
-remain separate extensions. They require an explicit device-memory and stream
-contract across both algorithm and backend plugins; the current host tensor ABI
-must not be used to pass device pointers.
+fallback and verification details. PatchCore device-resident tensors and GPU preprocessing use a separate negotiated
+ABI with synchronous completion and explicit ownership/device IDs. The legacy
+host tensor ABI must not be used to pass device pointers.
 
 ## Host output ownership and copy cost
 
@@ -149,10 +148,12 @@ retained outputs. Consumers read via const `Tensor::data()` and `byteSize()`;
 `bytes` can be empty for an external view. Mutable `data()` access creates a
 private copy so it cannot change another consumer's shared output.
 
-TensorRT still performs device-to-host output transfers. ORT copies its
+The legacy TensorRT host path still performs device-to-host output transfers;
+PatchCore CUDA compute negotiates independently owned device outputs. ORT copies its
 runtime output into a host Tensor, and preprocessing, feature transforms
-and postprocessing still run on CPU. GPU Faiss uploads the flattened CPU features
-and returns distances/labels to CPU. The existing `backendMs` includes inference,
+and postprocessing run on CPU outside the optional PatchCore compute path. Legacy
+GPU Faiss uploads flattened host features; its new device extension accepts CUDA
+queries/distances and returns labels to the host. The existing `backendMs` includes inference,
 transfers and backend/plugin handling; compare it with `adapterMs` and `totalMs`
 on production models before deciding the next GPU optimization.
 

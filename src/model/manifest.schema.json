@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "model", "graph_contract", "input", "runtime", "outputs", "algorithm"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
     "model": {
       "type": "object",
       "additionalProperties": false,
@@ -101,6 +101,11 @@
   },
   "allOf": [
     {
+      "if": { "properties": { "model": { "properties": { "algorithm": { "const": "patchcore" } } },
+        "algorithm": { "properties": { "variant": { "enum": ["mh", "subad"] } }, "required": ["variant"] } } },
+      "then": { "properties": { "schema_version": { "const": 2 } } }
+    },
+    {
       "if": { "properties": { "model": { "properties": { "algorithm": { "const": "patchcore" } } } } },
       "then": {
         "properties": {
@@ -183,9 +188,25 @@
     },
     "patchcore": {
       "type": "object",
-      "required": ["type", "index", "feature_layers", "embedding_dimension"],
+      "required": ["type", "feature_layers", "embedding_dimension"],
+      "allOf": [
+        { "if": { "properties": { "variant": { "const": "subad" } }, "required": ["variant"] },
+          "then": { "required": ["statistics"] }, "else": { "required": ["index"] } },
+        { "if": { "properties": { "variant": { "const": "mh" } }, "required": ["variant"] },
+          "then": { "required": ["statistics"] } }
+      ],
       "properties": {
         "type": { "const": "patchcore" },
+        "variant": { "enum": ["original", "mh", "subad"], "default": "original" },
+        "statistics": { "$ref": "#/$defs/artifactPath" },
+        "feature_aggregation": { "enum": ["concat", "mean"] },
+        "pca_components": { "type": "integer", "minimum": 0 },
+        "explained_variance": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "covariance_shrinkage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "covariance_regularization": { "type": "number", "exclusiveMinimum": 0 },
+        "memory_bank_size": { "type": "integer", "minimum": 1 },
+        "streaming_chunk_size": { "type": "integer", "minimum": 1 },
+        "top_score_fraction": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
         "index": { "$ref": "#/$defs/artifactPath" },
         "feature_layers": { "$ref": "#/$defs/featureLayers" },
         "embedding_dimension": { "type": "integer", "minimum": 1 },
