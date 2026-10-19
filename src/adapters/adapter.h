@@ -20,6 +20,7 @@ public:
     virtual Result<void> configureCompute(int, const std::filesystem::path&) {
         return Status::error(ErrorCode::DeviceUnavailable, "Algorithm has no CUDA compute extension");
     }
+    virtual bool supportsDeviceCompute() const noexcept { return false; }
     virtual Result<void> validateSignature(const TensorSignature& signature) const = 0;
     virtual Result<RawPredictionBatch> predict(
         const TensorMap& outputs,

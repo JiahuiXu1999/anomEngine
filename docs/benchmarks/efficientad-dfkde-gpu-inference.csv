@@ -1,0 +1,4 @@
+algorithm,mode,total_ms,preprocess_ms,backend_ms,adapter_ms,postprocess_ms,compute_provider,device_tensor_path
+DFKDE,CPU,81.3002,0.2122,39.2879,41.7393,0.06,1,0
+DFKDE,TensorRT_CPU_stages,37.9134,0.2796,3.746,33.8229,0.064,1,0
+DFKDE,TensorRT_CUDA_stages,5.225,0.1545,3.056,1.9706,0.0434,2,1

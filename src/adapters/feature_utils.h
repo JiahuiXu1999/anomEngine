@@ -31,6 +31,12 @@ Result<Tensor> channelWiseL2(const Tensor& input);
 // EfficientAD teacher/student hard score.
 Result<Tensor> channelWiseL2Difference(const Tensor& left, const Tensor& right);
 
+// Normalize a non-empty CV_32FC1 map in place. Use double subtraction/division
+// before the final float conversion, preserving endpoints without cancellation
+// for nearly constant maps and without range overflow for finite float extrema.
+// Constant maps become zero. Shared by EfficientAD fitting and inference.
+void normalizeMinMax(cv::Mat& map);
+
 Result<Tensor> aggregateFeaturePyramid(
     const TensorMap& tensors,
     const std::unordered_map<std::string, std::string>& outputBindings,

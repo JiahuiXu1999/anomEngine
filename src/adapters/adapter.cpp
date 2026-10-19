@@ -83,6 +83,9 @@ public:
         return info;
     }
 
+    bool supportsDeviceCompute() const noexcept override {
+        return deviceApi_.configure && deviceApi_.predict;
+    }
     Result<void> configureCompute(int device, const std::filesystem::path& directory) override {
         if (!deviceApi_.configure) return Status::error(ErrorCode::DeviceUnavailable, "Algorithm has no device extension");
         auto path = pathToUtf8(directory);

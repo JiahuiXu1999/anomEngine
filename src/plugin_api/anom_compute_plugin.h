@@ -98,6 +98,27 @@ typedef struct anom_compute_padim_finalize {
     /* sums/moments float64; mean/precision float32, buffers for this chunk. */
 } anom_compute_padim_finalize;
 
+typedef struct anom_compute_channel_l2 {
+    anom_compute_layer input, reference;
+    int32_t difference; /* 0: norm(input), 1: norm(input-reference), over channels */
+    anom_compute_buffer output; /* float32 [N,1,H,W] */
+} anom_compute_channel_l2;
+typedef struct anom_compute_normalized_blend {
+    anom_compute_buffer hard, soft, output; /* float32 [N,H,W] */
+    int32_t n, height, width;
+    float hard_weight, soft_weight; /* normalize each image/branch before weighted blending */
+} anom_compute_normalized_blend;
+typedef struct anom_compute_dfkde {
+    anom_compute_buffer patches, mean, basis, gallery, output;
+    int32_t rows, dimension, rank, gallery_count;
+    float sigma;
+    uint64_t workspace_bytes; /* bounds temporary KDE storage, excluding inputs/output */
+    /* float32: patches[Q,D], mean[D], basis[D,K], gallery[G,K], output[Q]. */
+} anom_compute_dfkde;
+typedef struct anom_compute_capabilities {
+    uint64_t required_operations; /* bit (1 << operation); success only if all are supported */
+} anom_compute_capabilities;
+
 enum {
     ANOM_COMPUTE_AGGREGATE = 1,
     ANOM_COMPUTE_PROJECT,
@@ -112,7 +133,11 @@ enum {
     ANOM_COMPUTE_PADIM_DISTANCE,
     ANOM_COMPUTE_PADIM_ACCUMULATE,
     ANOM_COMPUTE_PADIM_FINALIZE,
-    ANOM_COMPUTE_PADIM_PROBE /* uint32_t value 1; old plugins reject this operation */
+    ANOM_COMPUTE_PADIM_PROBE, /* uint32_t value 1; old plugins reject this operation */
+    ANOM_COMPUTE_CHANNEL_L2,
+    ANOM_COMPUTE_NORMALIZED_BLEND,
+    ANOM_COMPUTE_DFKDE,
+    ANOM_COMPUTE_CAPABILITIES
 };
 typedef struct anom_compute_api_v1 {
     uint32_t struct_size, abi_version;

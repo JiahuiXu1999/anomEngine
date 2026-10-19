@@ -121,6 +121,8 @@ aggregation, coreset/PCA fitting, statistical transforms and anomaly maps; see
 [PatchCore GPU pipeline and benchmarks](docs/patchcore-gpu.md).
 PaDiM uses the same plugin for selected features, per-location Mahalanobis distances,
 and double-precision statistical fitting; see [PaDiM GPU design](docs/padim-gpu.md).
+EfficientAD and DFKDE also follow GPU/AUTO selection for CUDA feature processing
+and scoring; see [EfficientAD/DFKDE GPU pipelines](docs/efficientad-dfkde-gpu.md).
 
 For a smaller ONNX Runtime-only build without the FAISS-based plugins or tests:
 

@@ -298,7 +298,14 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
             session->executionInfo_.fallbackReason += "Faiss CUDA -> CPU: " + search.value().fallbackReason;
         }
 
-        if (manifest.algorithm == AlgorithmType::PatchCore || manifest.algorithm == AlgorithmType::Padim) {
+        if (options.computeMode == 2 && !session->adapter_->supportsDeviceCompute())
+            return Status::error(ErrorCode::DeviceUnavailable, "Algorithm plugin has no CUDA compute extension");
+        // Legacy PatchCore/PaDiM plugins already reported CPU compute and an
+        // optional-compute fallback. Preserve that telemetry when an old
+        // plugin lacks the extension; new GPU paths are selected by capability.
+        const bool legacyComputePlugin = !session->adapter_->supportsDeviceCompute() &&
+            (manifest.algorithm == AlgorithmType::PatchCore || manifest.algorithm == AlgorithmType::Padim);
+        if (session->adapter_->supportsDeviceCompute() || legacyComputePlugin) {
             session->executionInfo_.computeProvider = ExecutionProvider::Cpu;
             if (options.computeMode == 2 && !onGpu)
                 return Status::error(ErrorCode::InvalidArgument, "CUDA compute requires a GPU network request");

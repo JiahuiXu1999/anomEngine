@@ -107,6 +107,9 @@ Result<void> DfkdePipeline::saveStatistics(const std::filesystem::path& path) co
         return Status::error(ErrorCode::NotInitialized,
                              "DFKDE pipeline contains no training features");
     }
+    if (vectorCount > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return Status::error(ErrorCode::OutOfMemory, "DFKDE PCA exceeds the matrix row limit");
+    }
     const int components = std::min(config_.nComponents,
                                     std::min(dimension, static_cast<int>(vectorCount)));
     if (components <= 0) {
@@ -118,11 +121,15 @@ Result<void> DfkdePipeline::saveStatistics(const std::filesystem::path& path) co
                  const_cast<float*>(features_.data()));
     cv::Mat mean, eigenvectors;
     cv::PCACompute(data, mean, eigenvectors, components);
+    // OpenCV stores principal components as K x D rows. The v1 artifact and
+    // inference adapter use a row-major D x K projection matrix.
+    cv::Mat basis;
+    cv::transpose(eigenvectors, basis);
 
     cv::Mat meanTiled;
     cv::repeat(mean, static_cast<int>(vectorCount), 1, meanTiled);
     cv::Mat centered = data - meanTiled;
-    cv::Mat gallery = centered * eigenvectors;  // N x components
+    cv::Mat gallery = centered * basis;  // N x components
 
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     if (!stream) {
@@ -138,7 +145,7 @@ Result<void> DfkdePipeline::saveStatistics(const std::filesystem::path& path) co
                              "Unable to write DFKDE statistics header", path.string());
     }
     writeFloats(stream, mean.ptr<float>(0), static_cast<std::size_t>(dimension));
-    writeFloats(stream, eigenvectors.ptr<float>(0),
+    writeFloats(stream, basis.ptr<float>(0),
                 static_cast<std::size_t>(dimension) * components);
     writeFloats(stream, gallery.ptr<float>(0),
                 static_cast<std::size_t>(vectorCount) * components);

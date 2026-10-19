@@ -336,6 +336,14 @@ void runScores(Context& c, const anom_compute_scores& a) {
     require(!bad, "Invalid neighbor distances");
 }
 #include "compute/cuda_padim.cuh"
+#include "compute/cuda_efficientad.cuh"
+#include "compute/cuda_dfkde.cuh"
+void runCapabilities(Context&, const anom_compute_capabilities& capabilities) {
+    constexpr uint64_t supported = (uint64_t{1} << ANOM_COMPUTE_CAPABILITIES) - 2;
+    require(capabilities.required_operations != 0 &&
+                (capabilities.required_operations & ~supported) == 0,
+            "Requested CUDA operations are unavailable");
+}
 template <class F>
 int32_t guarded(F f) {
     lastError.clear();
@@ -431,6 +439,10 @@ int32_t ANOM_PLUGIN_CALL run(void* p, int32_t op, const void* args, size_t size)
             OP(ANOM_COMPUTE_PADIM_ACCUMULATE, anom_compute_padim_accumulate, runPadimAccumulate);
             OP(ANOM_COMPUTE_PADIM_FINALIZE, anom_compute_padim_finalize, runPadimFinalize);
             OP(ANOM_COMPUTE_PADIM_PROBE, uint32_t, runPadimProbe);
+            OP(ANOM_COMPUTE_CHANNEL_L2, anom_compute_channel_l2, runChannelL2);
+            OP(ANOM_COMPUTE_NORMALIZED_BLEND, anom_compute_normalized_blend, runNormalizedBlend);
+            OP(ANOM_COMPUTE_DFKDE, anom_compute_dfkde, runDfkde);
+            OP(ANOM_COMPUTE_CAPABILITIES, anom_compute_capabilities, runCapabilities);
             default:
                 throw std::invalid_argument("Unknown compute operation");
         }

@@ -3,9 +3,9 @@
 The algorithm objects share the same C ABI in both modes. Device selection is a
 load-time policy; the backend and provider are separate internal choices. GPU
 means GPU neural-network inference and, for PatchCore/SPADE, GPU Faiss retrieval
-unless permitted loading fallback selects CPU. PatchCore and PaDiM can additionally select the optional CUDA compute plugin and negotiated
+unless permitted loading fallback selects CPU. Algorithms with a negotiated device extension can additionally select the optional CUDA compute plugin and negotiated
 device tensor extensions; see [PatchCore GPU computation](patchcore-gpu.md) and
-[PaDiM GPU computation](padim-gpu.md).
+[PaDiM GPU computation](padim-gpu.md), and [EfficientAD/DFKDE GPU computation](efficientad-dfkde-gpu.md).
 Other algorithms continue using host tensors and CPU image/feature processing. GPU neural-network inference always uses TensorRT;
 ONNX Runtime is the CPU backend.
 
@@ -151,9 +151,9 @@ retained outputs. Consumers read via const `Tensor::data()` and `byteSize()`;
 private copy so it cannot change another consumer's shared output.
 
 The legacy TensorRT host path still performs device-to-host output transfers;
-PatchCore/PaDiM CUDA compute negotiates independently owned device outputs. ORT copies its
+PatchCore/PaDiM/EfficientAD/DFKDE CUDA compute negotiates independently owned device outputs. ORT copies its
 runtime output into a host Tensor, and preprocessing, feature transforms
-and postprocessing run on CPU outside the optional PatchCore/PaDiM compute paths. Legacy
+and postprocessing run on CPU outside the supported optional compute paths. Final shared postprocessing still runs on CPU. Legacy
 GPU Faiss uploads flattened host features; its new device extension accepts CUDA
 queries/distances and returns labels to the host. The existing `backendMs` includes inference,
 transfers and backend/plugin handling; compare it with `adapterMs` and `totalMs`

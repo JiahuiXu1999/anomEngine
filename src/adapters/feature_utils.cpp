@@ -20,6 +20,22 @@ Tensor allocateFloatNchw(int batch, int channels, int height, int width) {
 
 }  // namespace
 
+void normalizeMinMax(cv::Mat& map) {
+    CV_Assert(!map.empty() && map.dims == 2 && map.type() == CV_32FC1);
+    double minimum = 0.0, maximum = 0.0;
+    cv::minMaxLoc(map, &minimum, &maximum);
+    if (!(maximum > minimum)) {
+        map = cv::Scalar(0.0F);
+        return;
+    }
+    const double range = maximum - minimum;
+    for (int row = 0; row < map.rows; ++row) {
+        float* values = map.ptr<float>(row);
+        for (int column = 0; column < map.cols; ++column)
+            values[column] = static_cast<float>((static_cast<double>(values[column]) - minimum) / range);
+    }
+}
+
 Result<NchwView> viewNchwFloat(const Tensor& tensor, const std::string& context) {
     if (tensor.dtype != DataType::Float32) {
         return Status::error(ErrorCode::TensorTypeMismatch,

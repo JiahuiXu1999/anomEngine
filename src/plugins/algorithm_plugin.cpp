@@ -376,7 +376,8 @@ extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_algorithm_plugin_que
     return 0;
 }
 
-#if defined(ANOM_ALGORITHM_PATCHCORE) || defined(ANOM_ALGORITHM_PADIM)
+#if defined(ANOM_ALGORITHM_PATCHCORE) || defined(ANOM_ALGORITHM_PADIM) || \
+    defined(ANOM_ALGORITHM_EFFICIENTAD) || defined(ANOM_ALGORITHM_DFKDE)
 extern "C" ANOM_PLUGIN_EXPORT int32_t ANOM_PLUGIN_CALL anom_algorithm_query_device_v1(uint32_t version, anom_algorithm_device_api_v1* api) {
     if (version != 1 || !api || api->struct_size < sizeof(*api)) return -1;
     *api = {sizeof(*api), 1, configureCompute, predictDevice}; return 0;

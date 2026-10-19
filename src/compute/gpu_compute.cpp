@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <opencv2/imgproc.hpp>
+#include <set>
 #include <stdexcept>
 namespace anom::model {
 namespace {
@@ -42,6 +43,26 @@ Result<std::shared_ptr<GpuCompute>> GpuCompute::load(int device, const std::file
 }
 GpuCompute::~GpuCompute() {
     if (instance_) api_.destroy(instance_);
+}
+Result<void> GpuCompute::supportsOperations(uint64_t operations) const {
+    if (!operations)
+        return Status::error(ErrorCode::InvalidArgument, "No CUDA operations requested");
+    const anom_compute_capabilities capabilities{operations};
+    const int32_t status = api_.run(instance_, ANOM_COMPUTE_CAPABILITIES,
+                                    &capabilities, sizeof(capabilities));
+    try {
+        checked(status);
+        return {};
+    } catch (const std::exception& error) {
+        // A legacy compute plugin rejects the new operation with InvalidArgument.
+        // Treat that as a capability mismatch so AUTO can select the CPU path.
+        const auto code = status == static_cast<int32_t>(ErrorCode::InvalidArgument)
+            ? ErrorCode::PluginAbiMismatch
+            : (status >= static_cast<int32_t>(ErrorCode::InvalidArgument) &&
+                       status <= static_cast<int32_t>(ErrorCode::DeviceUnavailable)
+                   ? static_cast<ErrorCode>(status) : ErrorCode::PluginAbiMismatch);
+        return Status::error(code, "Required CUDA compute operations are unavailable", error.what());
+    }
 }
 void GpuCompute::checked(int32_t s) const {
     if (!s) return;
@@ -95,14 +116,29 @@ Tensor GpuCompute::download(const Tensor& t) const {
 Tensor GpuCompute::aggregate(const TensorMap& outputs,
                              const std::unordered_map<std::string, std::string>& bindings,
                              const PatchCoreConfig& config) {
+    require(config.embeddingDimension > 0, "Invalid embedding dimension");
+    return aggregateImpl(outputs, bindings, config.featureLayers, config.meanAggregation,
+                         config.poolingKernel, config.poolingStride, config.poolingPadding,
+                         config.embeddingDimension);
+}
+Tensor GpuCompute::aggregateFeatures(const TensorMap& outputs,
+                                    const std::unordered_map<std::string, std::string>& bindings,
+                                    const std::vector<std::string>& semantics) {
+    return aggregateImpl(outputs, bindings, semantics, false, 1, 1, 0, 0);
+}
+Tensor GpuCompute::aggregateImpl(const TensorMap& outputs,
+                                const std::unordered_map<std::string, std::string>& bindings,
+                                const std::vector<std::string>& semantics, bool mean,
+                                int kernel, int stride, int padding, int expectedDimension) {
     std::vector<anom_compute_layer> layers;
+    std::set<std::string> names;
     int dimension = 0, batch = 0, h = 0, w = 0;
-    require(config.poolingStride > 0 && config.poolingKernel > 0 && config.poolingKernel <= 1024 &&
-                config.poolingPadding >= 0 && config.poolingPadding <= 1024,
+    require(stride > 0 && kernel > 0 && kernel <= 1024 && padding >= 0 && padding <= 1024,
             "Invalid pooling");
-    for (const auto& semantic : config.featureLayers) {
+    for (const auto& semantic : semantics) {
         auto b = bindings.find(semantic);
         require(b != bindings.end(), "Missing feature binding");
+        require(names.insert(b->second).second, "Duplicate feature tensor binding");
         auto found = outputs.find(b->second);
         require(found != outputs.end(), "Missing feature tensor");
         const auto& t = found->second;
@@ -113,25 +149,23 @@ Tensor GpuCompute::aggregate(const TensorMap& outputs,
         require(size.ok() && size.value() <= SIZE_MAX / 4 && size.value() * 4 == t.byteSize(),
                 "Feature size mismatch");
         require(c <= INT_MAX - dimension, "Channel overflow");
+        require(int64_t(ih) + 2LL * padding >= kernel && int64_t(iw) + 2LL * padding >= kernel,
+                "Empty pooled feature grid");
+        require(layers.empty() || n == batch, "Feature batches differ");
         dimension += c;
         layers.push_back({buffer(t), n, c, ih, iw});
         if (layers.size() == 1) {
             batch = n;
-            h = integer((int64_t(ih) + 2LL * config.poolingPadding - config.poolingKernel) /
-                            config.poolingStride +
-                        1);
-            w = integer((int64_t(iw) + 2LL * config.poolingPadding - config.poolingKernel) /
-                            config.poolingStride +
-                        1);
+            h = integer((int64_t(ih) + 2LL * padding - kernel) / stride + 1);
+            w = integer((int64_t(iw) + 2LL * padding - kernel) / stride + 1);
         }
     }
     require(!layers.empty(), "No feature layers");
-    if (config.meanAggregation) dimension = layers.front().c;
-    require(dimension == config.embeddingDimension, "Embedding dimension mismatch");
+    if (mean) dimension = layers.front().c;
+    require(expectedDimension == 0 || dimension == expectedDimension, "Embedding dimension mismatch");
     auto out = allocate({batch, h, w, dimension});
-    anom_compute_aggregate a{layers.data(),        layers.size(),         config.poolingKernel,
-                             config.poolingStride, config.poolingPadding, config.meanAggregation ? 1 : 0,
-                             buffer(out)};
+    anom_compute_aggregate a{layers.data(), layers.size(), kernel, stride, padding, mean ? 1 : 0,
+                            buffer(out)};
     run(ANOM_COMPUTE_AGGREGATE, a);
     return out;
 }

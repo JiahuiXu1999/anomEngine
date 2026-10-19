@@ -59,16 +59,6 @@ Result<Tensor> singleChannelMap(const Tensor& tensor, const std::string& context
     return feature::channelWiseL2(tensor);
 }
 
-void normalize01(cv::Mat& map) {
-    double minimum = 0.0, maximum = 0.0;
-    cv::minMaxLoc(map, &minimum, &maximum);
-    if (maximum > minimum) {
-        map = (map - minimum) / static_cast<float>(maximum - minimum);
-    } else {
-        map = cv::Scalar(0.0F);
-    }
-}
-
 }  // namespace
 
 EfficientADPipeline::EfficientADPipeline(EfficientADPipelineConfig config)
@@ -151,8 +141,8 @@ Result<void> EfficientADPipeline::addBackendOutputs(
         cv::Mat softMap(height, width, CV_32FC1,
                         const_cast<float*>(softResized.value().data<float>() +
                                            static_cast<std::size_t>(n) * elements));
-        normalize01(hardMap);
-        normalize01(softMap);
+        feature::normalizeMinMax(hardMap);
+        feature::normalizeMinMax(softMap);
 
         cv::Mat combined(height, width, CV_32FC1);
         cv::addWeighted(hardMap, hardAlpha, softMap, softAlpha, 0.0, combined);

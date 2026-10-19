@@ -1,0 +1,11 @@
+stage,shape,cpu_ms,gpu_ms,speedup
+efficientad_l2_host,4x384x56x56,10.3505,4.7027,2.20097
+efficientad_l2_device_boundary,4x384x56x56,22.0395,0.1216,181.246
+efficientad_adapter_host_features,4x384x56x56_to224,12.4774,6.0355,2.06733
+efficientad_adapter_device_boundary,4x384x56x56_to224,25.4888,1.5109,16.8699
+dfkde_cached_stats_host,784x128_K16_G4096,53.1367,1.2298,43.2076
+dfkde_cached_stats_device,784x128_K16_G4096,53.1367,1.2233,43.4372
+dfkde_cached_stats_host,784x1536_K16_G1024,39.3249,1.5792,24.9018
+dfkde_cached_stats_device,784x1536_K16_G1024,39.3249,0.7739,50.8139
+dfkde_adapter_host_features,784x1536_K16_G1024_to224,36.7602,2.2583,16.2778
+dfkde_adapter_device_boundary,784x1536_K16_G1024_to224,36.2852,2.0115,18.0389

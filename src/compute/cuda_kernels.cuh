@@ -21,9 +21,14 @@ __device__ float interpolate(const float* x, int h, int w, int y, int z, int oh,
     int y1 = max(0, min(h - 1, y0 + 1)), x1 = max(0, min(w - 1, x0 + 1));
     y0 = max(0, min(h - 1, y0));
     x0 = max(0, min(w - 1, x0));
-    float a = x[size_t(y0) * w + x0] * (1 - fx) + x[size_t(y0) * w + x1] * fx,
-          b = x[size_t(y1) * w + x0] * (1 - fx) + x[size_t(y1) * w + x1] * fx;
-    return a * (1 - fy) + b * fy;
+    // Difference form preserves constant maps exactly. Independent weighted
+    // products can introduce a one-ulp variation that min/max normalization
+    // subsequently amplifies. Double intermediates also avoid float overflow
+    // when finite neighboring samples have opposite signs.
+    const double top = x[size_t(y0) * w + x0], bottom = x[size_t(y1) * w + x0];
+    const float a = float(top + (double(x[size_t(y0) * w + x1]) - top) * fx),
+                b = float(bottom + (double(x[size_t(y1) * w + x1]) - bottom) * fx);
+    return float(double(a) + (double(b) - a) * fy);
 }
 __global__ void pack(const float* x, float* y, size_t total, int c, int h, int w, int oh, int ow,
                      int dimension, int offset, int mean, int layers) {

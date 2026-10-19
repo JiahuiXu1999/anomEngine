@@ -16,6 +16,13 @@ class GpuCompute : public std::enable_shared_from_this<GpuCompute> {
         checked(api_.copy(instance_, destination, source));
     }
     Result<void> supportsPadim() const;
+    Result<void> supportsOperations(uint64_t operations) const;
+    Tensor channelL2(const Tensor& input, const Tensor* reference = nullptr);
+    Tensor normalizedBlend(const Tensor& hard, const Tensor& soft, float hardWeight, float softWeight);
+    Tensor aggregateFeatures(const TensorMap&, const std::unordered_map<std::string, std::string>&,
+                             const std::vector<std::string>& semantics);
+    Tensor dfkdeScores(const Tensor& patches, const Tensor& mean, const Tensor& basis,
+                       const Tensor& gallery, float sigma, size_t workspaceBytes = 64 * 1024 * 1024);
     Tensor selectFeatures(const TensorMap&, const std::unordered_map<std::string, std::string>&,
                           const std::vector<std::string>& semantics,
                           const std::vector<int32_t>& indices, int height, int width);
@@ -48,6 +55,9 @@ class GpuCompute : public std::enable_shared_from_this<GpuCompute> {
                   std::vector<float>& maxima, std::vector<int64_t>& indices);
 
    private:
+    Tensor aggregateImpl(const TensorMap&, const std::unordered_map<std::string, std::string>&,
+                         const std::vector<std::string>& semantics, bool mean, int kernel,
+                         int stride, int padding, int expectedDimension);
     GpuCompute() = default;
     void checked(int32_t status) const;
     std::shared_ptr<plugins::DynamicLibrary> library_;

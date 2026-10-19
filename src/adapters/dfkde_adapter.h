@@ -18,6 +18,8 @@ public:
     DfkdeAdapter& operator=(const DfkdeAdapter&) = delete;
 
     Result<void> loadAssets(const ModelPackage& package) override;
+    Result<void> configureCompute(int device, const std::filesystem::path& directory) override;
+    bool supportsDeviceCompute() const noexcept override { return true; }
     Result<void> validateSignature(const TensorSignature& signature) const override;
     Result<RawPredictionBatch> predict(const TensorMap& outputs,
                                        const cv::Size& modelInputSize) const override;
