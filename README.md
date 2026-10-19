@@ -119,6 +119,8 @@ CPU/GPU selection, runtime probing and fallback are documented in
 PatchCore also provides an optional CUDA compute plugin for preprocessing, feature
 aggregation, coreset/PCA fitting, statistical transforms and anomaly maps; see
 [PatchCore GPU pipeline and benchmarks](docs/patchcore-gpu.md).
+PaDiM uses the same plugin for selected features, per-location Mahalanobis distances,
+and double-precision statistical fitting; see [PaDiM GPU design](docs/padim-gpu.md).
 
 For a smaller ONNX Runtime-only build without the FAISS-based plugins or tests:
 

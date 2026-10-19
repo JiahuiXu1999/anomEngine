@@ -3,8 +3,9 @@
 The algorithm objects share the same C ABI in both modes. Device selection is a
 load-time policy; the backend and provider are separate internal choices. GPU
 means GPU neural-network inference and, for PatchCore/SPADE, GPU Faiss retrieval
-unless permitted loading fallback selects CPU. PatchCore can additionally select the optional CUDA compute plugin and negotiated
-device tensor extensions; see [PatchCore GPU computation](patchcore-gpu.md).
+unless permitted loading fallback selects CPU. PatchCore and PaDiM can additionally select the optional CUDA compute plugin and negotiated
+device tensor extensions; see [PatchCore GPU computation](patchcore-gpu.md) and
+[PaDiM GPU computation](padim-gpu.md).
 Other algorithms continue using host tensors and CPU image/feature processing. GPU neural-network inference always uses TensorRT;
 ONNX Runtime is the CPU backend.
 
@@ -92,8 +93,9 @@ Always handle the result of `load`.
   required. Use a CPU ORT distribution for a minimal deployment.
 - `*-nvidia` presets enable TensorRT and `ANOM_ENABLE_FAISS_GPU`. ONNX Runtime
   remains the CPU backend used by explicit CPU requests and permitted fallback.
-- Deploy a CPU ONNX Runtime distribution. CUDA and cuDNN dependencies come only
-  from TensorRT and the optional GPU Faiss plugin.
+- Deploy a CPU ONNX Runtime distribution. CUDA dependencies come from TensorRT,
+  the optional GPU Faiss plugin and the optional CUDA compute plugin; cuDNN requirements
+  depend on the deployed runtime distribution.
 
 ## Plugin compatibility and threading
 
@@ -149,9 +151,9 @@ retained outputs. Consumers read via const `Tensor::data()` and `byteSize()`;
 private copy so it cannot change another consumer's shared output.
 
 The legacy TensorRT host path still performs device-to-host output transfers;
-PatchCore CUDA compute negotiates independently owned device outputs. ORT copies its
+PatchCore/PaDiM CUDA compute negotiates independently owned device outputs. ORT copies its
 runtime output into a host Tensor, and preprocessing, feature transforms
-and postprocessing run on CPU outside the optional PatchCore compute path. Legacy
+and postprocessing run on CPU outside the optional PatchCore/PaDiM compute paths. Legacy
 GPU Faiss uploads flattened host features; its new device extension accepts CUDA
 queries/distances and returns labels to the host. The existing `backendMs` includes inference,
 transfers and backend/plugin handling; compare it with `adapterMs` and `totalMs`

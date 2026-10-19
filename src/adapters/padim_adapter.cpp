@@ -1,6 +1,7 @@
 #include "adapters/padim_adapter.h"
 
 #include "adapters/feature_utils.h"
+#include "compute/gpu_compute.h"
 
 #include <algorithm>
 #include <array>
@@ -247,8 +248,66 @@ public:
         return {};
     }
 
+    Result<void> configureCompute(int device, const std::filesystem::path& directory) {
+        if (device < 0) {
+            deviceMean_ = {}; devicePrecision_ = {}; compute_.reset();
+            return {};
+        }
+        if (!loaded_) return Status::error(ErrorCode::NotInitialized, "PaDiM statistics are not loaded");
+        if (config_.gaussianSigma > 511.0F)
+            return Status::error(ErrorCode::DeviceUnavailable, "PaDiM Gaussian kernel exceeds CUDA support");
+        auto loaded = GpuCompute::load(device, directory);
+        if (!loaded) return loaded.status();
+        auto supported = loaded.value()->supportsPadim();
+        if (!supported) return supported.status();
+        try {
+            const int64_t locations = int64_t(config_.featureHeight) * config_.featureWidth;
+            Tensor mean, precision;
+            mean.shape.dims = {locations, config_.embeddingDimension};
+            mean.setExternalView(mean_.data(), mean_.size() * sizeof(float));
+            precision.shape.dims = {locations, config_.embeddingDimension, config_.embeddingDimension};
+            precision.setExternalView(precision_.data(), precision_.size() * sizeof(float));
+            auto deviceMean = loaded.value()->upload(mean);
+            auto devicePrecision = loaded.value()->upload(precision);
+            compute_ = std::move(loaded.value());
+            deviceMean_ = std::move(deviceMean);
+            devicePrecision_ = std::move(devicePrecision);
+            return {};
+        } catch (const std::exception& e) {
+            return Status::error(ErrorCode::CudaFailure, "Unable to upload PaDiM statistics", e.what());
+        }
+    }
+
+    Result<RawPredictionBatch> predictGpu(const TensorMap& outputs, const cv::Size& inputSize) const {
+        try {
+            auto patches = compute_->selectFeatures(outputs, outputBindings_, config_.featureLayers,
+                                                    channelIndices_, config_.featureHeight, config_.featureWidth);
+            const int n = static_cast<int>(patches.shape.dims[0]);
+            auto distances = compute_->padimDistances(patches, deviceMean_, devicePrecision_);
+            const auto maps = compute_->download(compute_->maps(distances, n, config_.featureHeight,
+                                                   config_.featureWidth, inputSize, config_.gaussianSigma));
+            RawPredictionBatch result(static_cast<size_t>(n));
+            const size_t pixels = static_cast<size_t>(inputSize.height) * inputSize.width;
+            for (int i = 0; i < n; ++i) {
+                auto map = cv::Mat(inputSize.height, inputSize.width, CV_32FC1,
+                                  const_cast<float*>(maps.data<float>()) + static_cast<size_t>(i) * pixels,
+                                  static_cast<size_t>(inputSize.width) * sizeof(float)).clone();
+                double maximum = 0;
+                // PaDiM scores the resized, smoothed map, not the raw patch distances.
+                // The final map is required on CPU, so this small reduction needs no extra transfer.
+                cv::minMaxLoc(map, nullptr, &maximum);
+                result[static_cast<size_t>(i)].score = static_cast<float>(maximum);
+                result[static_cast<size_t>(i)].anomalyMap = std::move(map);
+            }
+            return result;
+        } catch (const std::exception& e) {
+            return Status::error(ErrorCode::CudaFailure, "GPU PaDiM prediction failed", e.what());
+        }
+    }
+
     Result<RawPredictionBatch> predict(const TensorMap& outputs, const cv::Size& inputSize) const {
         if (!loaded_) return Status::error(ErrorCode::NotInitialized, "PaDiM statistics are not loaded");
+        if (compute_) return predictGpu(outputs, inputSize);
         auto fullEmbedding = feature::aggregateFeaturePyramid(
             outputs, outputBindings_, config_.featureLayers, false, 1, 1, 0);
         if (!fullEmbedding) return fullEmbedding.status();
@@ -307,6 +366,8 @@ private:
     std::vector<float> mean_;
     std::vector<float> precision_;
     bool loaded_{false};
+    std::shared_ptr<GpuCompute> compute_;
+    Tensor deviceMean_, devicePrecision_;
 };
 
 PadimAdapter::PadimAdapter(PadimConfig config,
@@ -314,6 +375,9 @@ PadimAdapter::PadimAdapter(PadimConfig config,
     : impl_(std::make_unique<Impl>(std::move(config), std::move(bindings))) {}
 PadimAdapter::~PadimAdapter() = default;
 Result<void> PadimAdapter::loadAssets(const ModelPackage& package) { return impl_->loadAssets(package); }
+Result<void> PadimAdapter::configureCompute(int device, const std::filesystem::path& directory) {
+    return impl_->configureCompute(device, directory);
+}
 Result<void> PadimAdapter::validateSignature(const TensorSignature& signature) const { return impl_->validateSignature(signature); }
 Result<RawPredictionBatch> PadimAdapter::predict(const TensorMap& outputs,
                                                  const cv::Size& modelInputSize) const {

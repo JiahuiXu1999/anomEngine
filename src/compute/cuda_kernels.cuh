@@ -21,8 +21,8 @@ __device__ float interpolate(const float* x, int h, int w, int y, int z, int oh,
     int y1 = max(0, min(h - 1, y0 + 1)), x1 = max(0, min(w - 1, x0 + 1));
     y0 = max(0, min(h - 1, y0));
     x0 = max(0, min(w - 1, x0));
-    float a = x[y0 * w + x0] * (1 - fx) + x[y0 * w + x1] * fx,
-          b = x[y1 * w + x0] * (1 - fx) + x[y1 * w + x1] * fx;
+    float a = x[size_t(y0) * w + x0] * (1 - fx) + x[size_t(y0) * w + x1] * fx,
+          b = x[size_t(y1) * w + x0] * (1 - fx) + x[size_t(y1) * w + x1] * fx;
     return a * (1 - fy) + b * fy;
 }
 __global__ void pack(const float* x, float* y, size_t total, int c, int h, int w, int oh, int ow,

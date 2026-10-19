@@ -842,6 +842,22 @@ static anom_status_t createFitter(
         fitter->preprocessor =
             std::make_unique<ImagePreprocessor>(fitter->package.manifest().input);
 
+        if (options->reserved[0] > 2)
+            return fail(ANOM_STATUS_INVALID_ARGUMENT, "Invalid fitting compute mode");
+        const bool gpuBackend = fitter->package.manifest().runtime.backend == RuntimeBackend::TensorRT;
+        if (options->reserved[0] == 2 && !gpuBackend)
+            return fail(ANOM_STATUS_INVALID_ARGUMENT, "CUDA fitting requires a TensorRT template");
+        if (gpuBackend && options->reserved[0] != 1) {
+            auto compute = anom::model::GpuCompute::load(fitter->package.manifest().runtime.deviceId,
+                                                        fitter->pluginDirectory);
+            Result<void> supported = compute
+                ? (algorithm == AlgorithmType::Padim ? compute.value()->supportsPadim() : Result<void>{})
+                : Result<void>(compute.status());
+            if (supported) fitter->compute = std::move(compute.value());
+            else if (options->reserved[0] == 2 || !anom::model::retryableSearchFailure(supported.status().code))
+                return fail(supported.status());
+        }
+
         if (algorithm == AlgorithmType::PatchCore) {
 #if ANOM_ENGINE_HAS_PATCHCORE
             fitter->patchcoreConfig = std::get<PatchCoreConfig>(fitter->package.manifest().algorithmConfig);
@@ -858,15 +874,6 @@ static anom_status_t createFitter(
             if (!safeOutput(config.indexFile) || !safeOutput(config.statisticsFile) ||
                 config.indexFile.lexically_normal() == config.statisticsFile.lexically_normal())
                 return fail(ANOM_STATUS_INVALID_MODEL_PACKAGE, "PatchCore artifact paths collide or escape the package");
-            if (options->reserved[0] > 2) return fail(ANOM_STATUS_INVALID_ARGUMENT, "Invalid fitting compute mode");
-            const bool gpuBackend = fitter->package.manifest().runtime.backend == RuntimeBackend::TensorRT;
-            if (options->reserved[0] == 2 && !gpuBackend)
-                return fail(ANOM_STATUS_INVALID_ARGUMENT, "CUDA fitting requires a TensorRT template");
-            if (gpuBackend && options->reserved[0] != 1) {
-                auto compute = anom::model::GpuCompute::load(fitter->package.manifest().runtime.deviceId, fitter->pluginDirectory);
-                if (compute) fitter->compute = std::move(compute.value());
-                else if (options->reserved[0] == 2 || !anom::model::retryableSearchFailure(compute.status().code)) return fail(compute.status());
-            }
             PatchCorePipelineConfig fitConfig;
             fitConfig.compute = fitter->compute;
             fitConfig.statisticalConfig = config;
@@ -907,6 +914,7 @@ static anom_status_t createFitter(
             const auto& config =
                 std::get<PadimConfig>(fitter->package.manifest().algorithmConfig);
             PadimPipelineConfig fitConfig;
+            fitConfig.compute = fitter->compute;
             fitConfig.embeddingDimension = config.embeddingDimension;
             fitConfig.featureHeight = config.featureHeight;
             fitConfig.featureWidth = config.featureWidth;
@@ -1363,6 +1371,7 @@ anom_status_t ANOM_CALL padimFitterCreate(
     converted.padim_covariance_regularization = options->covariance_regularization;
     converted.padim_channel_indices = options->channel_indices;
     converted.padim_channel_index_count = options->channel_index_count;
+    converted.reserved[0] = options->compute_mode;
     anom_fitter_t* implementation = nullptr;
     const auto created = anom_fitter_create(&converted, &implementation);
     if (created != ANOM_STATUS_OK) return created;

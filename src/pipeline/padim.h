@@ -7,10 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
 namespace anom::model {
+
+class GpuCompute;
 
 struct PadimPipelineConfig {
     int embeddingDimension{0};
@@ -18,6 +21,10 @@ struct PadimPipelineConfig {
     int featureWidth{0};
     double covarianceRegularization{0.01};
     std::vector<std::int32_t> channelIndices;
+    std::shared_ptr<GpuCompute> compute;
+    // Limit the resident double statistics. Larger grids are processed in
+    // location chunks while keeping the full selected embedding on the GPU.
+    std::size_t gpuMemoryBudgetBytes{512u * 1024u * 1024u};
 };
 
 // Training-side PaDiM pipeline. It accumulates per-location Gaussian
@@ -42,11 +49,18 @@ public:
 
 private:
     Result<void> validateConfig() const;
+    Result<void> addGpuEmbedding(const Tensor& selected);
+    std::size_t gpuChunkLocations(std::size_t bytesPerLocation) const;
 
     PadimPipelineConfig config_;
     std::size_t sampleCount_{0};
     std::vector<double> sums_;
     std::vector<double> secondMoments_;
+    Tensor deviceSums_;
+    Tensor deviceSecondMoments_;
+    // A failed CUDA operation can leave only some chunks updated. Require an
+    // explicit clear or checkpoint restore rather than reuse partial state.
+    bool gpuUpdateFailed_{false};
 };
 
 }  // namespace anom::model

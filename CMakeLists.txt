@@ -26,7 +26,7 @@ endif()
 
 option(ANOM_ENABLE_TENSORRT "Build the TensorRT backend plugin" ON)
 option(ANOM_ENABLE_ONNXRUNTIME "Build the ONNX Runtime backend plugin" ON)
-option(ANOM_ENABLE_CUDA_COMPUTE "Build optional PatchCore CUDA compute plugin" OFF)
+option(ANOM_ENABLE_CUDA_COMPUTE "Build optional PatchCore/PaDiM CUDA compute plugin" OFF)
 option(ANOM_ENABLE_FAISS_GPU "Build the optional GPU Faiss retrieval plugin" OFF)
 option(ANOM_BUILD_ALGO_DIRECT "Build the direct-prediction algorithm plugin" ON)
 option(ANOM_BUILD_ALGO_EFFICIENTAD "Build the EfficientAD algorithm plugin" ON)
@@ -253,6 +253,7 @@ endif()
 
 set(ANOM_CORE_SOURCES
     "${ANOM_PRIVATE_SOURCE_ROOT}/compute/gpu_compute.cpp"
+    "${ANOM_PRIVATE_SOURCE_ROOT}/compute/gpu_padim.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/adapter.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/backends/backend_factory.cpp"
     "${ANOM_PRIVATE_SOURCE_ROOT}/infrastructure/json.cpp"
@@ -367,7 +368,11 @@ endif()
 if(ANOM_BUILD_ALGO_PADIM)
     anom_add_algorithm(padim ANOM_ALGORITHM_PADIM
         "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/padim_adapter.cpp"
+        "${ANOM_PRIVATE_SOURCE_ROOT}/compute/gpu_compute.cpp"
+        "${ANOM_PRIVATE_SOURCE_ROOT}/compute/gpu_padim.cpp"
+        "${ANOM_PRIVATE_SOURCE_ROOT}/plugins/dynamic_library.cpp"
         "${ANOM_PRIVATE_SOURCE_ROOT}/adapters/feature_utils.cpp")
+    target_link_libraries(anom_algo_padim PRIVATE ${CMAKE_DL_LIBS})
 endif()
 if(ANOM_BUILD_ALGO_PATCHCORE)
     anom_add_algorithm(patchcore ANOM_ALGORITHM_PATCHCORE

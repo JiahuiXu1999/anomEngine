@@ -1,0 +1,8 @@
+stage,shape,cpu_ms,gpu_ms,speedup
+select_host,4x1536x28x28_to100,28.5186,1.7866,15.9625
+select_device_boundary,same,32.947,0.0624,527.997
+distance_cached_stats_host,4x784x100,19.3124,1.3346,14.4706
+distance_cached_stats_device,4x784x100,18.1735,1.1625,15.6331
+adapter_host_features,4x784x100_to224,46.2563,3.7482,12.3409
+fit_accumulate_resident,16x784x100,91.2709,2.1422,42.6062
+fit_finalize_with_file_io,784x100x100,300.483,38.6755,7.76933

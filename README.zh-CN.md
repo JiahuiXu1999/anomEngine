@@ -114,6 +114,7 @@ CPU/GPU 选择、运行时探测和回退规则见
 [`docs/cpu-gpu-modes.md`](docs/cpu-gpu-modes.md)。GPU 模式支持神经网络推理和
 PatchCore/SPADE 的 Faiss 检索。PatchCore 另有可选的 CUDA 预处理、特征聚合、coreset、
 统计变换和异常图计算，见 [PatchCore GPU 链路](docs/patchcore-gpu.md)。
+PaDiM 可复用同一插件加速通道提取、逐位置马氏距离和双精度统计拟合，见 [PaDiM GPU 设计](docs/padim-gpu.md)。
 Faiss 的独立插件、构建依赖、回退和执行信息见
 [`docs/faiss-cpu-gpu.md`](docs/faiss-cpu-gpu.md)。
 

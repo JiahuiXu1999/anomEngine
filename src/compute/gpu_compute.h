@@ -11,6 +11,20 @@ class GpuCompute : public std::enable_shared_from_this<GpuCompute> {
     GpuCompute(const GpuCompute&) = delete;
     int device() const { return device_; }
     Tensor allocate(std::vector<int64_t> shape);
+    Tensor allocateBytes(size_t bytes);
+    void copyBuffer(anom_compute_buffer destination, anom_compute_buffer source) const {
+        checked(api_.copy(instance_, destination, source));
+    }
+    Result<void> supportsPadim() const;
+    Tensor selectFeatures(const TensorMap&, const std::unordered_map<std::string, std::string>&,
+                          const std::vector<std::string>& semantics,
+                          const std::vector<int32_t>& indices, int height, int width);
+    Tensor padimDistances(const Tensor& patches, const Tensor& mean, const Tensor& precision);
+    void padimAccumulate(const Tensor& patches, int n, int locations, int dimension,
+                         int begin, int count, anom_compute_buffer sums, anom_compute_buffer moments);
+    void padimFinalize(anom_compute_buffer sums, anom_compute_buffer moments,
+                       int locations, int dimension, uint64_t samples, double regularization,
+                       float* mean, float* precision);
     Tensor upload(const Tensor& tensor);
     Tensor download(const Tensor& tensor) const;
     static anom_compute_buffer buffer(const Tensor& tensor);

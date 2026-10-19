@@ -335,6 +335,7 @@ void runScores(Context& c, const anom_compute_scores& a) {
     check(cudaStreamSynchronize(c.stream));
     require(!bad, "Invalid neighbor distances");
 }
+#include "compute/cuda_padim.cuh"
 template <class F>
 int32_t guarded(F f) {
     lastError.clear();
@@ -425,6 +426,11 @@ int32_t ANOM_PLUGIN_CALL run(void* p, int32_t op, const void* args, size_t size)
             OP(ANOM_COMPUTE_PREPROCESS, anom_compute_preprocess, runPreprocess);
             OP(ANOM_COMPUTE_MAP, anom_compute_map, runMap);
             OP(ANOM_COMPUTE_SCORES, anom_compute_scores, runScores);
+            OP(ANOM_COMPUTE_SELECT_FEATURES, anom_compute_select_features, runSelectFeatures);
+            OP(ANOM_COMPUTE_PADIM_DISTANCE, anom_compute_padim_distance, runPadimDistance);
+            OP(ANOM_COMPUTE_PADIM_ACCUMULATE, anom_compute_padim_accumulate, runPadimAccumulate);
+            OP(ANOM_COMPUTE_PADIM_FINALIZE, anom_compute_padim_finalize, runPadimFinalize);
+            OP(ANOM_COMPUTE_PADIM_PROBE, uint32_t, runPadimProbe);
             default:
                 throw std::invalid_argument("Unknown compute operation");
         }

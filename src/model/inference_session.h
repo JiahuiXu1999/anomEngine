@@ -25,7 +25,7 @@ struct LoadOptions {
     PrecisionPreference precision{PrecisionPreference::Manifest};
     std::filesystem::path pluginDirectory;
     bool warmup{false};
-    int computeMode{0}; // 0 auto, 1 CPU, 2 require CUDA (PatchCore only)
+    int computeMode{0}; // 0 auto, 1 CPU, 2 require CUDA (PatchCore/PaDiM)
 };
 
 class InferenceSession {

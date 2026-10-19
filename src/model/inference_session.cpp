@@ -298,7 +298,7 @@ Result<std::unique_ptr<InferenceSession>> InferenceSession::load(
             session->executionInfo_.fallbackReason += "Faiss CUDA -> CPU: " + search.value().fallbackReason;
         }
 
-        if (manifest.algorithm == AlgorithmType::PatchCore) {
+        if (manifest.algorithm == AlgorithmType::PatchCore || manifest.algorithm == AlgorithmType::Padim) {
             session->executionInfo_.computeProvider = ExecutionProvider::Cpu;
             if (options.computeMode == 2 && !onGpu)
                 return Status::error(ErrorCode::InvalidArgument, "CUDA compute requires a GPU network request");

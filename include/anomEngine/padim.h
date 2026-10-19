@@ -16,7 +16,8 @@ typedef struct anom_padim_fitter_options {
     double covariance_regularization;
     const int32_t* channel_indices;
     size_t channel_index_count;
-    uint32_t reserved[8];
+    uint32_t compute_mode; /* ANOM_COMPUTE_AUTO / CPU / CUDA; follows template backend. */
+    uint32_t reserved[7];
 } anom_padim_fitter_options_t;
 
 /*

@@ -15,6 +15,7 @@ public:
     PadimAdapter& operator=(const PadimAdapter&) = delete;
 
     Result<void> loadAssets(const ModelPackage& package) override;
+    Result<void> configureCompute(int device, const std::filesystem::path& directory) override;
     Result<void> validateSignature(const TensorSignature& signature) const override;
     Result<RawPredictionBatch> predict(const TensorMap& outputs,
                                        const cv::Size& modelInputSize) const override;

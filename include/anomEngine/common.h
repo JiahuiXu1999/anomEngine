@@ -102,7 +102,8 @@ enum {
  * CPU never initializes CUDA. GPU requires a GPU inference provider unless
  * LOAD_ONLY fallback is enabled. PatchCore/SPADE Faiss retrieval follows the
  * selected device, allowing independent CPU fallback with AUTO or LOAD_ONLY.
- * Preprocessing, feature transforms and postprocessing currently run on CPU.
+ * PatchCore/PaDiM preprocessing and feature computation support optional CUDA;
+ * final result postprocessing runs on CPU.
  * AUTO allows CPU selection even with FALLBACK_NONE.
  * Selection is fixed after load/warmup; predict never retries on another device.
  */
@@ -117,7 +118,7 @@ typedef struct anom_algorithm_options {
     anom_fallback_policy_t fallback;
     anom_precision_t precision;
     const char* backend_utf8;
-    /* PatchCore compute: 0 auto (optional CUDA on GPU), 1 CPU, 2 require CUDA. */
+    /* PatchCore/PaDiM compute: 0 auto (optional CUDA on GPU), 1 CPU, 2 require CUDA. */
     uint32_t compute_mode;
     uint32_t reserved[7];
 } anom_algorithm_options_t;

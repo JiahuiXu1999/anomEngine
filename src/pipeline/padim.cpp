@@ -1,16 +1,19 @@
 #include "pipeline/padim.h"
 
 #include "adapters/feature_utils.h"
+#include "compute/gpu_compute.h"
 
 #include <opencv2/core.hpp>
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <set>
+#include <stdexcept>
 
 namespace anom::model {
 namespace {
@@ -30,6 +33,34 @@ template <typename T>
 bool readValue(std::ifstream& stream, T& value) {
     stream.read(reinterpret_cast<char*>(&value), sizeof(T));
     return static_cast<bool>(stream);
+}
+
+anom_compute_buffer hostDoubles(const double* data, std::size_t count) {
+    return {const_cast<double*>(data), count * sizeof(double), -1};
+}
+
+anom_compute_buffer sliceBuffer(const Tensor& tensor, std::size_t offset,
+                                std::size_t bytes) {
+    auto buffer = GpuCompute::buffer(tensor);
+    buffer.data = static_cast<std::byte*>(buffer.data) + offset;
+    buffer.bytes = bytes;
+    return buffer;
+}
+
+void zeroBuffer(const std::shared_ptr<GpuCompute>& compute, const Tensor& tensor) {
+    const std::size_t chunkBytes = std::min<std::size_t>(tensor.byteSize(), 1024 * 1024);
+    std::vector<std::byte> zeros(chunkBytes);
+    for (std::size_t offset = 0; offset < tensor.byteSize(); offset += chunkBytes) {
+        const auto bytes = std::min(chunkBytes, tensor.byteSize() - offset);
+        compute->copyBuffer(sliceBuffer(tensor, offset, bytes), {zeros.data(), bytes, -1});
+    }
+}
+
+Status gpuError(const char* operation, const std::exception& error) {
+    const auto code = dynamic_cast<const std::bad_alloc*>(&error) ? ErrorCode::OutOfMemory
+        : dynamic_cast<const std::invalid_argument*>(&error) ? ErrorCode::InvalidArgument
+                                                            : ErrorCode::CudaFailure;
+    return Status::error(code, operation, error.what());
 }
 
 }  // namespace
@@ -60,18 +91,115 @@ Result<void> PadimPipeline::validateConfig() const {
                                  "PaDiM channel indices must be unique and non-negative");
         }
     }
+    const std::size_t dimension = static_cast<std::size_t>(config_.embeddingDimension);
+    const std::size_t locations = static_cast<std::size_t>(config_.featureHeight) *
+                                  config_.featureWidth;
+    if (locations > std::numeric_limits<std::size_t>::max() / dimension ||
+        locations * dimension > std::numeric_limits<std::size_t>::max() / dimension /
+                                    sizeof(double) ||
+        locations * dimension * dimension >
+            std::numeric_limits<std::size_t>::max() / sizeof(double) - locations * dimension) {
+        return Status::error(ErrorCode::OutOfMemory,
+                             "PaDiM statistics dimensions overflow size_t");
+    }
+    if (config_.compute && (locations > static_cast<std::size_t>(INT_MAX) ||
+                            config_.gpuMemoryBudgetBytes == 0)) {
+        return Status::error(ErrorCode::InvalidArgument,
+                             "PaDiM GPU locations or memory budget is invalid");
+    }
     return {};
+}
+
+std::size_t PadimPipeline::gpuChunkLocations(std::size_t bytesPerLocation) const {
+    const auto locations = static_cast<std::size_t>(config_.featureHeight) * config_.featureWidth;
+    // A single location is the indivisible unit even when it exceeds the budget.
+    return std::min(locations, std::max<std::size_t>(1, config_.gpuMemoryBudgetBytes / bytesPerLocation));
+}
+
+Result<void> PadimPipeline::addGpuEmbedding(const Tensor& selected) {
+    if (gpuUpdateFailed_) {
+        return Status::error(ErrorCode::NotInitialized,
+                             "PaDiM GPU statistics require clear or checkpoint restore after a failed update");
+    }
+    const std::size_t locations = static_cast<std::size_t>(config_.featureHeight) * config_.featureWidth;
+    const std::size_t dimension = static_cast<std::size_t>(config_.embeddingDimension);
+    if (selected.shape.dims.size() != 4 || selected.shape.dims[0] <= 0 ||
+        selected.shape.dims[0] > INT_MAX || selected.shape.dims[1] != config_.featureHeight ||
+        selected.shape.dims[2] != config_.featureWidth ||
+        selected.shape.dims[3] != config_.embeddingDimension) {
+        return Status::error(ErrorCode::TensorShapeMismatch,
+                             "PaDiM GPU training embedding shape does not match configuration");
+    }
+    const auto batch = static_cast<std::size_t>(selected.shape.dims[0]);
+    if (sampleCount_ > std::numeric_limits<std::size_t>::max() - batch) {
+        return Status::error(ErrorCode::OutOfMemory, "PaDiM sample count overflows size_t");
+    }
+    try {
+        const auto sumsCount = locations * dimension;
+        const auto momentsCount = sumsCount * dimension;
+        const auto bytesPerLocation = (dimension + dimension * dimension) * sizeof(double);
+        if (!deviceSums_.deviceData && sums_.empty()) {
+            if ((sumsCount + momentsCount) * sizeof(double) <= config_.gpuMemoryBudgetBytes) {
+                auto sums = config_.compute->allocateBytes(sumsCount * sizeof(double));
+                auto moments = config_.compute->allocateBytes(momentsCount * sizeof(double));
+                zeroBuffer(config_.compute, sums);
+                zeroBuffer(config_.compute, moments);
+                deviceSums_ = std::move(sums);
+                deviceSecondMoments_ = std::move(moments);
+            } else {
+                std::vector<double> sums(sumsCount, 0.0), moments(momentsCount, 0.0);
+                sums_ = std::move(sums);
+                secondMoments_ = std::move(moments);
+            }
+        }
+        const auto chunk = gpuChunkLocations(bytesPerLocation);
+        // selectFeatures validated every selected value before this point.
+        // If any CUDA update fails, never silently continue with partial state.
+        gpuUpdateFailed_ = true;
+        for (std::size_t begin = 0; begin < locations; begin += chunk) {
+            const auto count = std::min(chunk, locations - begin);
+            const auto sums = deviceSums_.deviceData
+                ? sliceBuffer(deviceSums_, begin * dimension * sizeof(double),
+                              count * dimension * sizeof(double))
+                : hostDoubles(sums_.data() + begin * dimension, count * dimension);
+            const auto moments = deviceSecondMoments_.deviceData
+                ? sliceBuffer(deviceSecondMoments_, begin * dimension * dimension * sizeof(double),
+                              count * dimension * dimension * sizeof(double))
+                : hostDoubles(secondMoments_.data() + begin * dimension * dimension,
+                              count * dimension * dimension);
+            config_.compute->padimAccumulate(selected, static_cast<int>(batch),
+                static_cast<int>(locations), config_.embeddingDimension,
+                static_cast<int>(begin), static_cast<int>(count), sums, moments);
+        }
+        sampleCount_ += batch;
+        gpuUpdateFailed_ = false;
+        return {};
+    } catch (const std::exception& error) {
+        return gpuError("Unable to accumulate PaDiM GPU statistics", error);
+    }
 }
 
 Result<void> PadimPipeline::addBackendOutputs(
     const TensorMap& outputs,
     const std::unordered_map<std::string, std::string>& outputBindings,
     const PadimConfig& algorithmConfig) {
+    auto valid = validateConfig();
+    if (!valid) return valid.status();
     if (algorithmConfig.embeddingDimension != config_.embeddingDimension ||
         algorithmConfig.featureHeight != config_.featureHeight ||
         algorithmConfig.featureWidth != config_.featureWidth) {
         return Status::error(ErrorCode::InvalidArgument,
                              "PaDiM pipeline and manifest dimensions differ");
+    }
+    if (config_.compute) {
+        try {
+            auto selected = config_.compute->selectFeatures(outputs, outputBindings,
+                algorithmConfig.featureLayers, config_.channelIndices,
+                config_.featureHeight, config_.featureWidth);
+            return addGpuEmbedding(selected);
+        } catch (const std::exception& error) {
+            return gpuError("Unable to select PaDiM GPU training features", error);
+        }
     }
     auto embedding = feature::aggregateFeaturePyramid(
         outputs, outputBindings, algorithmConfig.featureLayers, false, 1, 1, 0);
@@ -82,6 +210,29 @@ Result<void> PadimPipeline::addBackendOutputs(
 Result<void> PadimPipeline::addEmbedding(const Tensor& fullEmbedding) {
     auto valid = validateConfig();
     if (!valid) return valid.status();
+    if (config_.compute) {
+        try {
+            // Preserve the public NCHW embedding contract while sharing the
+            // fused selection path used for backend outputs.
+            TensorMap outputs;
+            auto& view = outputs["embedding"];
+            view.dtype = fullEmbedding.dtype;
+            view.shape = fullEmbedding.shape;
+            if (fullEmbedding.deviceData) {
+                view.deviceData = fullEmbedding.deviceData;
+                view.deviceId = fullEmbedding.deviceId;
+                view.externalByteSize = fullEmbedding.byteSize();
+                view.externalOwner = fullEmbedding.externalOwner;
+            } else {
+                view.setExternalView(fullEmbedding.data<std::byte>(), fullEmbedding.byteSize());
+            }
+            auto selected = config_.compute->selectFeatures(outputs, {{"embedding", "embedding"}},
+                {"embedding"}, config_.channelIndices, config_.featureHeight, config_.featureWidth);
+            return addGpuEmbedding(selected);
+        } catch (const std::exception& error) {
+            return gpuError("Unable to select PaDiM GPU training embedding", error);
+        }
+    }
     auto selected = feature::selectChannels(fullEmbedding, config_.channelIndices);
     if (!selected) return selected.status();
     auto view = feature::viewNchwFloat(selected.value(), "PaDiM training embedding");
@@ -113,6 +264,12 @@ Result<void> PadimPipeline::addEmbedding(const Tensor& fullEmbedding) {
     }
 
     const std::vector<float> patches = feature::flattenPatches(selected.value());
+    for (const float value : patches) {
+        if (!std::isfinite(value)) {
+            return Status::error(ErrorCode::InvalidArgument,
+                                 "PaDiM training embedding contains non-finite values");
+        }
+    }
     for (int batch = 0; batch < view.value().batch; ++batch) {
         for (std::size_t location = 0; location < locations; ++location) {
             const float* patch = patches.data() +
@@ -120,10 +277,6 @@ Result<void> PadimPipeline::addEmbedding(const Tensor& fullEmbedding) {
             double* sum = sums_.data() + location * dimension;
             double* moment = secondMoments_.data() + location * dimension * dimension;
             for (std::size_t row = 0; row < dimension; ++row) {
-                if (!std::isfinite(patch[row])) {
-                    return Status::error(ErrorCode::InvalidArgument,
-                                         "PaDiM training embedding contains non-finite values");
-                }
                 sum[row] += patch[row];
                 for (std::size_t column = 0; column < dimension; ++column) {
                     moment[row * dimension + column] +=
@@ -141,7 +294,12 @@ Result<void> PadimPipeline::saveArtifacts(
     const std::filesystem::path& channelIndicesPath) const {
     auto valid = validateConfig();
     if (!valid) return valid.status();
-    if (sampleCount_ == 0 || sums_.empty() || secondMoments_.empty()) {
+    if (gpuUpdateFailed_) {
+        return Status::error(ErrorCode::NotInitialized,
+                             "PaDiM GPU statistics require clear or checkpoint restore after a failed update");
+    }
+    if (sampleCount_ == 0 ||
+        (!deviceSums_.deviceData && (sums_.empty() || secondMoments_.empty()))) {
         return Status::error(ErrorCode::NotInitialized,
                              "PaDiM pipeline contains no training samples");
     }
@@ -151,39 +309,68 @@ Result<void> PadimPipeline::saveArtifacts(
     const std::size_t dimension = static_cast<std::size_t>(config_.embeddingDimension);
     std::vector<float> means(locations * dimension);
     std::vector<float> precisions(locations * dimension * dimension);
-    const double inverseSamples = 1.0 / static_cast<double>(sampleCount_);
-    for (std::size_t location = 0; location < locations; ++location) {
-        const double* sum = sums_.data() + location * dimension;
-        const double* moment = secondMoments_.data() + location * dimension * dimension;
-        cv::Mat covariance(config_.embeddingDimension, config_.embeddingDimension, CV_64FC1);
-        for (std::size_t row = 0; row < dimension; ++row) {
-            const double mean = sum[row] * inverseSamples;
-            means[location * dimension + row] = static_cast<float>(mean);
-            for (std::size_t column = 0; column < dimension; ++column) {
-                double value = moment[row * dimension + column] * inverseSamples -
-                               mean * (sum[column] * inverseSamples);
-                if (row == column) value += config_.covarianceRegularization;
-                covariance.at<double>(static_cast<int>(row), static_cast<int>(column)) = value;
+    if (config_.compute) {
+        try {
+            // Finalization needs covariance/inverse workspace in addition to
+            // the input statistics. Bound each solve batch independently of
+            // whether the accumulated statistics are resident or host backed.
+            const auto bytesPerLocation = (dimension + dimension * dimension) * sizeof(double);
+            const auto chunk = std::min(locations, std::max<std::size_t>(1,
+                config_.gpuMemoryBudgetBytes / 4 / bytesPerLocation));
+            for (std::size_t begin = 0; begin < locations; begin += chunk) {
+                const auto count = std::min(chunk, locations - begin);
+                const auto sums = deviceSums_.deviceData
+                    ? sliceBuffer(deviceSums_, begin * dimension * sizeof(double),
+                                  count * dimension * sizeof(double))
+                    : hostDoubles(sums_.data() + begin * dimension, count * dimension);
+                const auto moments = deviceSecondMoments_.deviceData
+                    ? sliceBuffer(deviceSecondMoments_, begin * dimension * dimension * sizeof(double),
+                                  count * dimension * dimension * sizeof(double))
+                    : hostDoubles(secondMoments_.data() + begin * dimension * dimension,
+                                  count * dimension * dimension);
+                config_.compute->padimFinalize(sums, moments, static_cast<int>(count),
+                    config_.embeddingDimension, static_cast<std::uint64_t>(sampleCount_),
+                    config_.covarianceRegularization, means.data() + begin * dimension,
+                    precisions.data() + begin * dimension * dimension);
             }
+        } catch (const std::exception& error) {
+            return gpuError("Unable to finalize PaDiM GPU statistics", error);
         }
-        cv::Mat precision;
-        if (cv::invert(covariance, precision, cv::DECOMP_CHOLESKY) == 0.0) {
-            return Status::error(ErrorCode::AdapterFailure,
-                                 "PaDiM covariance matrix is not positive definite",
-                                 "location " + std::to_string(location));
-        }
-        float* target = precisions.data() + location * dimension * dimension;
-        for (std::size_t row = 0; row < dimension; ++row) {
-            for (std::size_t column = 0; column < dimension; ++column) {
-                const double value = precision.at<double>(static_cast<int>(row),
-                                                          static_cast<int>(column));
-                if (!std::isfinite(value) ||
-                    std::abs(value) > std::numeric_limits<float>::max()) {
-                    return Status::error(ErrorCode::AdapterFailure,
-                                         "PaDiM precision matrix cannot be represented as float32",
-                                         "location " + std::to_string(location));
+    } else {
+        const double inverseSamples = 1.0 / static_cast<double>(sampleCount_);
+        for (std::size_t location = 0; location < locations; ++location) {
+            const double* sum = sums_.data() + location * dimension;
+            const double* moment = secondMoments_.data() + location * dimension * dimension;
+            cv::Mat covariance(config_.embeddingDimension, config_.embeddingDimension, CV_64FC1);
+            for (std::size_t row = 0; row < dimension; ++row) {
+                const double mean = sum[row] * inverseSamples;
+                means[location * dimension + row] = static_cast<float>(mean);
+                for (std::size_t column = 0; column < dimension; ++column) {
+                    double value = moment[row * dimension + column] * inverseSamples -
+                                   mean * (sum[column] * inverseSamples);
+                    if (row == column) value += config_.covarianceRegularization;
+                    covariance.at<double>(static_cast<int>(row), static_cast<int>(column)) = value;
                 }
-                target[row * dimension + column] = static_cast<float>(value);
+            }
+            cv::Mat precision;
+            if (cv::invert(covariance, precision, cv::DECOMP_CHOLESKY) == 0.0) {
+                return Status::error(ErrorCode::AdapterFailure,
+                                     "PaDiM covariance matrix is not positive definite",
+                                     "location " + std::to_string(location));
+            }
+            float* target = precisions.data() + location * dimension * dimension;
+            for (std::size_t row = 0; row < dimension; ++row) {
+                for (std::size_t column = 0; column < dimension; ++column) {
+                    const double value = precision.at<double>(static_cast<int>(row),
+                                                              static_cast<int>(column));
+                    if (!std::isfinite(value) ||
+                        std::abs(value) > std::numeric_limits<float>::max()) {
+                        return Status::error(ErrorCode::AdapterFailure,
+                                             "PaDiM precision matrix cannot be represented as float32",
+                                             "location " + std::to_string(location));
+                    }
+                    target[row * dimension + column] = static_cast<float>(value);
+                }
             }
         }
     }
@@ -235,7 +422,12 @@ Result<void> PadimPipeline::saveCheckpoint(
     const std::filesystem::path& path) const {
     auto valid = validateConfig();
     if (!valid) return valid.status();
-    if (sampleCount_ == 0 || sums_.empty() || secondMoments_.empty()) {
+    if (gpuUpdateFailed_) {
+        return Status::error(ErrorCode::NotInitialized,
+                             "PaDiM GPU statistics require clear or checkpoint restore after a failed update");
+    }
+    if (sampleCount_ == 0 ||
+        (!deviceSums_.deviceData && (sums_.empty() || secondMoments_.empty()))) {
         return Status::error(ErrorCode::NotInitialized,
                              "PaDiM pipeline contains no training samples");
     }
@@ -249,8 +441,8 @@ Result<void> PadimPipeline::saveCheckpoint(
     const std::uint32_t height = static_cast<std::uint32_t>(config_.featureHeight);
     const std::uint32_t width = static_cast<std::uint32_t>(config_.featureWidth);
     const std::uint64_t samples = static_cast<std::uint64_t>(sampleCount_);
-    const std::uint64_t sumCount = static_cast<std::uint64_t>(sums_.size());
-    const std::uint64_t momentCount = static_cast<std::uint64_t>(secondMoments_.size());
+    const std::uint64_t sumCount = static_cast<std::uint64_t>(height) * width * dimension;
+    const std::uint64_t momentCount = sumCount * dimension;
     if (!writeValue(stream, kCheckpointVersion) || !writeValue(stream, dimension) ||
         !writeValue(stream, height) || !writeValue(stream, width) ||
         !writeValue(stream, samples) || !writeValue(stream, sumCount) ||
@@ -260,10 +452,28 @@ Result<void> PadimPipeline::saveCheckpoint(
     }
     stream.write(reinterpret_cast<const char*>(config_.channelIndices.data()),
                  static_cast<std::streamsize>(config_.channelIndices.size() * sizeof(std::int32_t)));
-    stream.write(reinterpret_cast<const char*>(sums_.data()),
-                 static_cast<std::streamsize>(sums_.size() * sizeof(double)));
-    stream.write(reinterpret_cast<const char*>(secondMoments_.data()),
-                 static_cast<std::streamsize>(secondMoments_.size() * sizeof(double)));
+    if (deviceSums_.deviceData) {
+        try {
+            // Preserve the v1 checkpoint byte layout without allocating a
+            // second full host copy of resident double statistics.
+            const std::size_t chunkBytes = std::min<std::size_t>(config_.gpuMemoryBudgetBytes, 8u * 1024u * 1024u);
+            std::vector<std::byte> chunk(chunkBytes);
+            for (const auto* tensor : {&deviceSums_, &deviceSecondMoments_}) {
+                for (std::size_t offset = 0; offset < tensor->byteSize(); offset += chunkBytes) {
+                    const auto bytes = std::min(chunkBytes, tensor->byteSize() - offset);
+                    config_.compute->copyBuffer({chunk.data(), bytes, -1}, sliceBuffer(*tensor, offset, bytes));
+                    stream.write(reinterpret_cast<const char*>(chunk.data()), static_cast<std::streamsize>(bytes));
+                }
+            }
+        } catch (const std::exception& error) {
+            return gpuError("Unable to snapshot PaDiM GPU statistics", error);
+        }
+    } else {
+        stream.write(reinterpret_cast<const char*>(sums_.data()),
+                     static_cast<std::streamsize>(sums_.size() * sizeof(double)));
+        stream.write(reinterpret_cast<const char*>(secondMoments_.data()),
+                     static_cast<std::streamsize>(secondMoments_.size() * sizeof(double)));
+    }
     if (!stream) {
         return Status::error(ErrorCode::IoError,
                              "Unable to write PaDiM checkpoint", path.string());
@@ -338,9 +548,25 @@ Result<void> PadimPipeline::loadCheckpoint(
                                  "PaDiM checkpoint contains non-finite moments", path.string());
         }
     }
+    Tensor deviceSums, deviceMoments;
+    if (config_.compute && (sums.size() + moments.size()) * sizeof(double) <= config_.gpuMemoryBudgetBytes) {
+        try {
+            deviceSums = config_.compute->allocateBytes(sums.size() * sizeof(double));
+            deviceMoments = config_.compute->allocateBytes(moments.size() * sizeof(double));
+            config_.compute->copyBuffer(GpuCompute::buffer(deviceSums), hostDoubles(sums.data(), sums.size()));
+            config_.compute->copyBuffer(GpuCompute::buffer(deviceMoments), hostDoubles(moments.data(), moments.size()));
+        } catch (const std::exception& error) {
+            return gpuError("Unable to restore PaDiM GPU statistics", error);
+        }
+        std::vector<double>().swap(sums);
+        std::vector<double>().swap(moments);
+    }
     sampleCount_ = static_cast<std::size_t>(samples);
     sums_ = std::move(sums);
     secondMoments_ = std::move(moments);
+    deviceSums_ = std::move(deviceSums);
+    deviceSecondMoments_ = std::move(deviceMoments);
+    gpuUpdateFailed_ = false;
     return {};
 }
 
@@ -348,6 +574,9 @@ void PadimPipeline::clear() {
     sampleCount_ = 0;
     sums_.clear();
     secondMoments_.clear();
+    deviceSums_ = {};
+    deviceSecondMoments_ = {};
+    gpuUpdateFailed_ = false;
 }
 
 }  // namespace anom::model

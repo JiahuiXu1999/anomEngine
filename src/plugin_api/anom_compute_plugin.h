@@ -72,6 +72,32 @@ typedef struct anom_compute_scores {
     float* maxima;
     int64_t* argmax; /* host, one per image */
 } anom_compute_scores;
+/* PaDiM operations preserve per-spatial-location statistics. */
+typedef struct anom_compute_select_features {
+    const anom_compute_layer* layers;
+    size_t count;
+    const int32_t* channels; /* host indices in concatenated channel order */
+    int32_t dimension, height, width;
+    anom_compute_buffer output; /* float32 [N,H,W,D] */
+} anom_compute_select_features;
+typedef struct anom_compute_padim_distance {
+    anom_compute_buffer patches, mean, precision, output;
+    int32_t n, locations, dimension; /* float32, precision [L,D,D] */
+} anom_compute_padim_distance;
+typedef struct anom_compute_padim_accumulate {
+    anom_compute_buffer patches, sums, moments;
+    int32_t n, locations, dimension, location_begin, location_count;
+    /* patches float32 [N,L,D]; sums/moments float64 for this location chunk.
+     * Existing sums/moments are updated in place, preserving population sums. */
+} anom_compute_padim_accumulate;
+typedef struct anom_compute_padim_finalize {
+    anom_compute_buffer sums, moments, mean, precision;
+    int32_t locations, dimension;
+    uint64_t samples;
+    double regularization;
+    /* sums/moments float64; mean/precision float32, buffers for this chunk. */
+} anom_compute_padim_finalize;
+
 enum {
     ANOM_COMPUTE_AGGREGATE = 1,
     ANOM_COMPUTE_PROJECT,
@@ -81,7 +107,12 @@ enum {
     ANOM_COMPUTE_EIGEN,
     ANOM_COMPUTE_PREPROCESS,
     ANOM_COMPUTE_MAP,
-    ANOM_COMPUTE_SCORES
+    ANOM_COMPUTE_SCORES,
+    ANOM_COMPUTE_SELECT_FEATURES,
+    ANOM_COMPUTE_PADIM_DISTANCE,
+    ANOM_COMPUTE_PADIM_ACCUMULATE,
+    ANOM_COMPUTE_PADIM_FINALIZE,
+    ANOM_COMPUTE_PADIM_PROBE /* uint32_t value 1; old plugins reject this operation */
 };
 typedef struct anom_compute_api_v1 {
     uint32_t struct_size, abi_version;
